@@ -1,12 +1,9 @@
 import streamlit as st
 import itertools
-import math
 
+# --- UTILITY FUNCTIONS ---
 def american_to_prob(value):
-    """
-    Converts American odds (e.g., -110, +150) or percentage input (e.g., 55) 
-    into a decimal probability (0.0 - 1.0).
-    """
+    """Converts American odds or percentage to decimal probability."""
     try:
         value = float(value)
         if 0 < value < 100: 
@@ -19,9 +16,7 @@ def american_to_prob(value):
         return 0.0
 
 def calculate_exact_wins_prob(probs, total_legs, required_wins):
-    """
-    Calculates the probability of getting EXACTLY 'required_wins' correct.
-    """
+    """Calculates probability of getting EXACTLY required_wins correct."""
     indices = range(total_legs)
     winning_combinations = itertools.combinations(indices, required_wins)
     total_prob = 0.0
@@ -37,201 +32,154 @@ def calculate_exact_wins_prob(probs, total_legs, required_wins):
     return total_prob
 
 def solve_general_kelly(outcomes):
-    """
-    Solves for the optimal Kelly fraction 'f' given a list of mutually exclusive outcomes.
-    outcomes structure: [(probability, net_odds), (probability, net_odds), ...]
-    
-    Returns the fraction of bankroll to wager (0.0 to 1.0).
-    """
-    # 1. Check if Expected Value is positive. If not, Kelly is 0.
+    """Solves for optimal Kelly fraction 'f' given mutually exclusive outcomes."""
     ev = sum(p * b for p, b in outcomes)
     if ev <= 0:
         return 0.0
 
-    # 2. Function representing the derivative of the growth rate
-    # We want to find f where sum( (p * b) / (1 + f * b) ) = 0
     def kelly_derivative(f):
         return sum((p * b) / (1 + f * b) for p, b in outcomes)
 
-    # 3. Binary Search for the root f in range [0, 0.9999]
-    # We cap at roughly 0.99 to avoid dividing by zero if net_odds is -1
-    low = 0.0
-    high = 0.9999
-    iterations = 50 
-    
-    # Check boundaries
-    if kelly_derivative(low) <= 0: return 0.0
-    
-    # Simple binary search to find f where derivative is close to 0
-    for _ in range(iterations):
+    low, high = 0.0, 0.9999
+    for _ in range(50):
         mid = (low + high) / 2
-        val = kelly_derivative(mid)
-        if val > 0:
+        if kelly_derivative(mid) > 0:
             low = mid
         else:
             high = mid
-            
     return low
 
-# --- STREAMLIT APP LAYOUT ---
-st.set_page_config(page_title="DK Pick6 Optimizer + Full Kelly", layout="wide")
+# --- PRESETS DATA ---
+PRESETS = {
+    "Custom": None,
+    "DK Pick6 NBA": {"p2": 3.3, "p3": 6.5, "p4": 12.8, "p4_i": 0.0, "p5": 17.4, "p5_i": 1.0, "p6": 35.5, "p6_i": 1.5},
+    "DK Pick6 NFL": {"p2": 3.4, "p3": 6.5, "p4": 12.4, "p4_i": 0.0, "p5": 17.7, "p5_i": 1.0, "p6": 37.6, "p6_i": 1.5},
+    "Ownersbox": {"p2": 3.0, "p3": 6.0, "p4": 6.0, "p4_i": 1.5, "p5": 10.0, "p5_i": 2.5, "p6": 25.0, "p6_i": 3.0},
+    "DK Pick6 NBA Promo": {"p2": 3.0, "p3": 6.5, "p4": 10.83, "p4_i": 0.0, "p5": 15.33, "p5_i": 1.0, "p6": 35.5, "p6_i": 1.5},
+    "DK Pick6 NFL Promo": {"p2": 3.0, "p3": 6.5, "p4": 10.89, "p4_i": 0.0, "p5": 14.835, "p5_i": 1.0, "p6": 36.9, "p6_i": 1.5},
+}
 
-st.title("DraftKings Pick6 EV & Full Kelly Optimizer")
-st.markdown("Calculates EV and precise Kelly stakes for complex insurance scenarios.")
+# --- APP CONFIG ---
+st.set_page_config(page_title="Prop Optimizer", layout="wide")
+st.title("Sportsbook EV & Kelly Optimizer")
 
-# --- SIDEBAR: BANKROLL & GLOBAL SETTINGS ---
-st.sidebar.header("Bankroll Management")
-bankroll = st.sidebar.number_input("Current Bankroll ($)", value=8000.0, step=100.0)
-kelly_fraction = 0.25 # Quarter Kelly
+# --- SIDEBAR & PRESET LOGIC ---
+st.sidebar.header("Settings")
+bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
+kelly_fraction = 0.25 
+boost_mult = st.sidebar.number_input("Payout Multiplier", value=1.0, step=0.1)
 
-st.sidebar.header("Global Boost")
-boost_mult = st.sidebar.number_input("Payout Multiplier (e.g. 1.3 for 30% boost)", value=1.0, step=0.1, format="%.2f")
+selected_preset = st.sidebar.selectbox("Load Payout Preset", list(PRESETS.keys()))
 
-# --- MAIN INPUTS: PAYOUT STRUCTURE ---
+# Update session state if a preset is chosen
+if selected_preset != "Custom":
+    data = PRESETS[selected_preset]
+    for key, val in data.items():
+        st.session_state[key] = val
+
+# --- PAYOUT INPUTS ---
 st.header("1. Payout Structure (Gross Multiples)")
-st.info("Enter the payout for getting ALL legs correct.")
 
+# We use session_state.get to allow the dropdown to "push" values into these boxes
 col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    payout_2 = st.number_input("2-Pick Payout (x)", value=3.0)
-with col2:
-    payout_3 = st.number_input("3-Pick Payout (x)", value=6.0)
-with col3:
-    payout_4 = st.number_input("4-Pick Payout (x)", value=10.0)
-with col4:
-    payout_5 = st.number_input("5-Pick Payout (x)", value=20.0)
-with col5:
-    payout_6 = st.number_input("6-Pick Payout (x)", value=40.0)
+payout_2 = col1.number_input("2-Pick", value=st.session_state.get("p2", 3.0), key="p2")
+payout_3 = col2.number_input("3-Pick", value=st.session_state.get("p3", 6.0), key="p3")
+payout_4 = col3.number_input("4-Pick", value=st.session_state.get("p4", 10.0), key="p4")
+payout_5 = col4.number_input("5-Pick", value=st.session_state.get("p5", 20.0), key="p5")
+payout_6 = col5.number_input("6-Pick", value=st.session_state.get("p6", 40.0), key="p6")
 
-# --- MAIN INPUTS: ODDS/PROBS ---
-st.header("2. Play Odds (True Odds)")
-st.markdown("Enter **American Odds** (e.g. -120) or **Probability %** (e.g. 54.5).")
+st.markdown("##### Insurance Payouts (1 Leg Wrong)")
+icol1, icol2, icol3 = st.columns([1, 1, 3])
+ins_4 = icol1.number_input("4-Pick Ins.", value=st.session_state.get("p4_i", 0.0), key="p4_i")
+ins_5 = icol2.number_input("5-Pick Ins.", value=st.session_state.get("p5_i", 1.0), key="p5_i")
+ins_6 = icol3.number_input("6-Pick Ins.", value=st.session_state.get("p6_i", 1.5), key="p6_i")
 
+# --- ODDS INPUTS ---
+st.header("2. Play Odds")
 odds_cols = st.columns(6)
 probs = []
 for i, col in enumerate(odds_cols):
-    with col:
-        val = st.text_input(f"Leg {i+1}", value="-110")
-        prob = american_to_prob(val)
-        probs.append(prob)
-        st.caption(f"{prob*100:.1f}% Win Prob")
+    val = col.text_input(f"Leg {i+1}", value="-110", key=f"leg_{i}")
+    prob = american_to_prob(val)
+    probs.append(prob)
+    col.caption(f"{prob*100:.1f}%")
 
-# --- CALCULATION ENGINE ---
-st.divider()
-
+# --- CALCULATION ---
 if st.button("Calculate EV & Stakes"):
     results = []
     
-    # --- 2 LEG SLIP (Simple Binary Kelly) ---
-    p_win_2 = probs[0] * probs[1]
-    gross_payout_2 = payout_2 * boost_mult
-    ev_2 = (p_win_2 * gross_payout_2) - 1
-    
-    # Outcome: (Prob, Net_Odds)
-    outcomes_2 = [
-        (p_win_2, gross_payout_2 - 1),  # Win
-        (1 - p_win_2, -1.0)             # Loss
+    # Generic logic for slips with insurance
+    # configurations: (num_legs, main_payout, insurance_payout)
+    configs = [
+        (2, payout_2, 0),
+        (3, payout_3, 0),
+        (4, payout_4, ins_4),
+        (5, payout_5, ins_5),
+        (6, payout_6, ins_6)
     ]
-    full_f_2 = solve_general_kelly(outcomes_2)
-    stake_2 = bankroll * (full_f_2 * kelly_fraction)
-    results.append({"Size": "2-Pick", "EV": ev_2, "Win %": p_win_2, "Stake": stake_2})
 
-    # --- 3 LEG SLIP ---
-    p_win_3 = probs[0] * probs[1] * probs[2]
-    gross_payout_3 = payout_3 * boost_mult
-    ev_3 = (p_win_3 * gross_payout_3) - 1
-    
-    outcomes_3 = [
-        (p_win_3, gross_payout_3 - 1),
-        (1 - p_win_3, -1.0)
-    ]
-    full_f_3 = solve_general_kelly(outcomes_3)
-    stake_3 = bankroll * (full_f_3 * kelly_fraction)
-    results.append({"Size": "3-Pick", "EV": ev_3, "Win %": p_win_3, "Stake": stake_3})
+    for n, main_p, ins_p in configs:
+        p_perfect = math.prod(probs[:n])
+        
+        if ins_p > 0:
+            p_ins = calculate_exact_wins_prob(probs[:n], n, n-1)
+            p_loss = 1.0 - p_perfect - p_ins
+            
+            gross_perfect = main_p * boost_mult
+            gross_ins = ins_p * boost_mult
+            
+            ev = (p_perfect * gross_perfect) + (p_ins * gross_ins) - 1
+            outcomes = [
+                (p_perfect, gross_perfect - 1),
+                (p_ins, gross_ins - 1),
+                (p_loss, -1.0)
+            ]
+        else:
+            p_loss = 1.0 - p_perfect
+            gross_perfect = main_p * boost_mult
+            ev = (p_perfect * gross_perfect) - 1
+            outcomes = [(p_perfect, gross_perfect - 1), (p_loss, -1.0)]
 
-    # --- 4 LEG SLIP ---
-    p_win_4 = probs[0] * probs[1] * probs[2] * probs[3]
-    gross_payout_4 = payout_4 * boost_mult
-    ev_4 = (p_win_4 * gross_payout_4) - 1
-    
-    outcomes_4 = [
-        (p_win_4, gross_payout_4 - 1),
-        (1 - p_win_4, -1.0)
-    ]
-    full_f_4 = solve_general_kelly(outcomes_4)
-    stake_4 = bankroll * (full_f_4 * kelly_fraction)
-    results.append({"Size": "4-Pick", "EV": ev_4, "Win %": p_win_4, "Stake": stake_4})
+        f = solve_general_kelly(outcomes)
+        results.append({
+            "Size": f"{n}-Pick",
+            "EV": ev,
+            "Win %": p_perfect,
+            "Stake": bankroll * (f * kelly_fraction)
+        })
 
-    # --- 5 LEG SLIP (Complex Multi-Outcome Kelly) ---
-    p_win_5_perfect = probs[0] * probs[1] * probs[2] * probs[3] * probs[4]
-    p_win_5_insurance = calculate_exact_wins_prob(probs[:5], 5, 4)
-    p_win_5_loss = 1.0 - p_win_5_perfect - p_win_5_insurance
-    
-    gross_payout_5_perfect = payout_5 * boost_mult
-    gross_payout_5_insurance = 1.0 * boost_mult # Insurance pays 1x Gross
-    
-    expected_return_5 = (p_win_5_perfect * gross_payout_5_perfect) + (p_win_5_insurance * gross_payout_5_insurance)
-    ev_5 = expected_return_5 - 1
-    
-    # Outcomes list for General Solver: [(prob, net_odds), ...]
-    outcomes_5 = [
-        (p_win_5_perfect, gross_payout_5_perfect - 1),    # Perfect Win
-        (p_win_5_insurance, gross_payout_5_insurance - 1),# Insurance Win (Net might be negative if boost < 1, but usually positive or 0)
-        (p_win_5_loss, -1.0)                              # Loss
-    ]
-    
-    full_f_5 = solve_general_kelly(outcomes_5)
-    stake_5 = bankroll * (full_f_5 * kelly_fraction)
-    results.append({"Size": "5-Pick", "EV": ev_5, "Win %": p_win_5_perfect, "Stake": stake_5})
-
-    # --- 6 LEG SLIP (Complex Multi-Outcome Kelly) ---
-    p_win_6_perfect = probs[0] * probs[1] * probs[2] * probs[3] * probs[4] * probs[5]
-    p_win_6_insurance = calculate_exact_wins_prob(probs[:6], 6, 5)
-    p_win_6_loss = 1.0 - p_win_6_perfect - p_win_6_insurance
-    
-    gross_payout_6_perfect = payout_6 * boost_mult
-    gross_payout_6_insurance = 1.5 * boost_mult 
-    
-    expected_return_6 = (p_win_6_perfect * gross_payout_6_perfect) + (p_win_6_insurance * gross_payout_6_insurance)
-    ev_6 = expected_return_6 - 1
-    
-    outcomes_6 = [
-        (p_win_6_perfect, gross_payout_6_perfect - 1),
-        (p_win_6_insurance, gross_payout_6_insurance - 1),
-        (p_win_6_loss, -1.0)
-    ]
-    
-    full_f_6 = solve_general_kelly(outcomes_6)
-    stake_6 = bankroll * (full_f_6 * kelly_fraction)
-    results.append({"Size": "6-Pick", "EV": ev_6, "Win %": p_win_6_perfect, "Stake": stake_6})
-
-    # --- DISPLAY RESULTS ---
+    # --- DISPLAY ---
     st.header("Results (Quarter Kelly)")
     
-    best_ev = -float('inf')
-    best_size = ""
-    
+    # 1. Metric Cards for quick glance
     res_cols = st.columns(5)
     for i, res in enumerate(results):
-        ev_percent = res['EV'] * 100
-        stake = res['Stake']
-        
-        if res['EV'] > best_ev:
-            best_ev = res['EV']
-            best_size = res['Size']
-
         with res_cols[i]:
             st.metric(
                 label=res['Size'], 
-                value=f"{ev_percent:.2f}% EV",
-                delta=f"Stake: ${stake:.2f}"
+                value=f"{res['EV']*100:.2f}% EV", 
+                delta=f"${res['Stake']:.2f} Stake"
             )
-            st.caption(f"Perfect Hit: {res['Win %']*100:.1f}%")
 
-    # Recommendation
-    st.subheader("Recommendation")
-    if best_ev > 0:
-        st.success(f"**Best Play:** {best_size} Slip with {best_ev*100:.2f}% EV.")
-        st.info("Stakes are calculated using a precise Generalized Kelly solver (Quarter Kelly applied).")
+    # 2. Comparative Table
+    st.subheader("Detailed Comparison")
+    
+    # Format the data for the table
+    table_data = []
+    for res in results:
+        table_data.append({
+            "Slip Size": res['Size'],
+            "EV %": f"{res['EV']*100:.2f}%",
+            "Win % (Perfect)": f"{res['Win %']*100:.2f}%",
+            "Recommended Stake": f"${res['Stake']:.2f}",
+            "Edge/Variance Ratio": round(res['EV'] / (res['Stake']/bankroll), 4) if res['Stake'] > 0 else 0
+        })
+    
+    st.table(table_data)
+
+    # 3. Final Recommendation Logic
+    best_play = max(results, key=lambda x: x['EV'])
+    if best_play['EV'] > 0:
+        st.success(f"**Top Recommendation:** The {best_play['Size']} slip offers the highest EV at {best_play['EV']*100:.2f}%.")
     else:
-        st.error(f"**Best Play:** {best_size}, but all EVs are negative. Recommended stake is $0.00.")
+        st.warning("No positive EV plays found with current odds/payouts.")
