@@ -75,6 +75,8 @@ st.title("DraftKings Pick6 EV & Expected Growth Optimizer")
 st.sidebar.header("Bankroll Management")
 bankroll = st.sidebar.number_input("Current Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction (e.g. 0.25 for Quarter)", 0.0, 1.0, 0.25)
+# New Input: Manual Stake Override
+manual_stake_input = st.sidebar.number_input("Manual Stake Override ($)", value=0.0, help="If > 0, EG is calculated based on this stake instead of Kelly.")
 boost_mult = st.sidebar.number_input("Global Payout Multiplier", value=1.0, step=0.1)
 
 selected_preset = st.sidebar.selectbox("Load Payout Preset", list(PRESETS.keys()))
@@ -128,19 +130,35 @@ if st.button("Calculate EV & Stakes"):
             ev = (p_perfect * gross_perfect) - 1
             outcomes = [(p_perfect, gross_perfect - 1), (p_loss, -1.0)]
 
+        # 1. Calculate Optimal Kelly Fraction (theoretical)
         f_full = solve_general_kelly(outcomes)
-        actual_f = f_full * kelly_fraction
-        eg_bps = calculate_expected_growth(outcomes, actual_f)
+        
+        # 2. Determine Actual Stake and Fraction used for EG calculation
+        if manual_stake_input > 0:
+            # Case: User manually input a stake size
+            actual_stake = manual_stake_input
+            # Fraction needed for EG formula: Stake / Bankroll
+            used_fraction = actual_stake / bankroll if bankroll > 0 else 0
+        else:
+            # Case: Use Quarter Kelly (or whatever slider is set to)
+            used_fraction = f_full * kelly_fraction
+            actual_stake = bankroll * used_fraction
+
+        # 3. Calculate Expected Growth based on the fraction determined above
+        eg_bps = calculate_expected_growth(outcomes, used_fraction)
 
         results.append({
             "Size": f"{n}-Pick",
             "EV": ev,
             "Win %": p_perfect,
-            "Stake": bankroll * actual_f,
+            "Stake": actual_stake,
             "EG": eg_bps
         })
 
     st.header("Results")
+    if manual_stake_input > 0:
+        st.info(f"Showing Expected Growth (EG) for Manual Stake: ${manual_stake_input:.2f}")
+
     res_cols = st.columns(5)
     for i, res in enumerate(results):
         res_cols[i].metric(res['Size'], f"{res['EV']*100:.1f}% EV", f"${res['Stake']:.2f}")
