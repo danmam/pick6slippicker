@@ -20,8 +20,6 @@ def solve_general_kelly(outcomes):
     Solves for optimal Kelly fraction 'f' given a list of (probability, net_odds) tuples.
     net_odds = (gross_payout - 1).
     """
-    # Filter out scenarios with net_odds <= -1 (total loss) for the derivative check,
-    # but they are needed for the EV sum.
     # Expected Value check:
     ev = sum(p * b for p, b in outcomes)
     if ev <= 0:
@@ -108,7 +106,6 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
     return outcomes
 
 # --- PRESETS DATA ---
-# Keys: p{N} = Perfect, p{N}_i = 1 Wrong, p{N}_i2 = 2 Wrong
 PRESETS = {
     "Custom": None,
     "DK Pick6 NBA": {
@@ -168,7 +165,7 @@ st.title("Pick6 & DFS Props EV Optimizer")
 
 # --- SIDEBAR ---
 st.sidebar.header("Configuration")
-bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
+bankroll = st.sidebar.number_input("Bankroll ($)", value=1000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
 manual_stake_input = st.sidebar.number_input("Manual Stake Override ($)", value=0.0, help="Calculates growth based on this specific bet size.")
 boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
@@ -293,10 +290,10 @@ if st.button("Calculate EV & Stakes", type="primary"):
     res_cols = st.columns(5)
     for i, res in enumerate(results):
         res_cols[i].metric(
-            res['Size'], 
-            f"{res['EV']*100:.1f}% EV", 
-            f"${res['Stake']:.2f}",
-            delta=f"{res['EG']:.1f} bps"
+            label=res['Size'], 
+            value=f"{res['EV']*100:.1f}% EV", 
+            delta=f"{res['EG']:.1f} bps",
+            help=f"Stake: ${res['Stake']:.2f}"
         )
 
     # Detailed Table
