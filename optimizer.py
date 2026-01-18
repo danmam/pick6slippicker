@@ -165,7 +165,7 @@ st.title("Pick6 & DFS Props EV Optimizer")
 
 # --- SIDEBAR ---
 st.sidebar.header("Configuration")
-bankroll = st.sidebar.number_input("Bankroll ($)", value=1000.0)
+bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
 manual_stake_input = st.sidebar.number_input("Manual Stake Override ($)", value=0.0, help="Calculates growth based on this specific bet size.")
 boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
