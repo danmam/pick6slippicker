@@ -60,29 +60,31 @@ def calculate_expected_growth(outcomes, stake_fraction):
         growth_sum += prob * math.log(term)
     return growth_sum * 10000
 
-def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost):
+def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
-    
+
     Args:
         probs: List of win probabilities for each leg.
         leg_multipliers: List of payout multipliers for each leg (if it wins).
         payout_structure: Dict mapping number of wins (k) to Base Payout Multiplier.
                           e.g., {6: 25.0, 5: 2.0, 4: 0.4}
         global_boost: Overall boost multiplier applied to the final payout.
-        
+        max_boost_amount: Maximum dollar amount the boost can add to payout (0 = unlimited).
+        stake: The stake amount used to calculate the dollar cap on boost.
+
     Returns:
         List of (probability, net_outcome) tuples.
     """
     num_legs = len(probs)
     outcomes = []
-    
+
     # Iterate through all 2^N combinations (0=Loss, 1=Win)
     for scenario in itertools.product([0, 1], repeat=num_legs):
         scenario_prob = 1.0
         scenario_leg_mult_product = 1.0
         wins = 0
-        
+
         for i, is_win in enumerate(scenario):
             if is_win:
                 scenario_prob *= probs[i]
@@ -90,19 +92,37 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
                 wins += 1
             else:
                 scenario_prob *= (1 - probs[i])
-        
+
         # Determine Base Payout based on number of wins
         base_payout = payout_structure.get(wins, 0.0)
-        
+
         if base_payout > 0:
-            # Gross Payout = Base * (Product of Winning Leg Mults) * Global Boost
-            gross_payout = base_payout * scenario_leg_mult_product * global_boost
+            # Calculate unboosted payout (what it would be with global_boost = 1.0)
+            unboosted_payout = base_payout * scenario_leg_mult_product
+            # Calculate fully boosted payout
+            boosted_payout = unboosted_payout * global_boost
+
+            # Apply max boost cap if specified
+            if max_boost_amount > 0 and stake > 0:
+                # The boost amount in multiplier terms (per $1 stake)
+                boost_amount_per_dollar = boosted_payout - unboosted_payout
+                # The max boost in multiplier terms (per $1 stake)
+                max_boost_per_dollar = max_boost_amount / stake
+
+                if boost_amount_per_dollar > max_boost_per_dollar:
+                    # Cap the boost
+                    gross_payout = unboosted_payout + max_boost_per_dollar
+                else:
+                    gross_payout = boosted_payout
+            else:
+                gross_payout = boosted_payout
+
             net_outcome = gross_payout - 1.0
         else:
             net_outcome = -1.0 # Loss of stake
-            
+
         outcomes.append((scenario_prob, net_outcome))
-        
+
     return outcomes
 
 # --- PRESETS DATA ---
@@ -195,6 +215,7 @@ bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
 manual_stake_input = st.sidebar.number_input("Manual Stake Override ($)", value=0.0, help="Calculates growth based on this specific bet size.")
 boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
+max_boost_dollars = st.sidebar.number_input("Max Boost $ (0 = unlimited)", value=0.0, step=5.0, help="Cap the boost amount. The payout increase from the boost cannot exceed this dollar amount.")
 
 st.sidebar.markdown("---")
 use_std_leg_mults = st.sidebar.checkbox("All leg multipliers 1.0x?", value=True)
@@ -273,31 +294,52 @@ if st.button("Calculate EV & Stakes", type="primary"):
     for n, payout_structure in slip_configs:
         current_probs = probs[:n]
         current_leg_mults = leg_mults[:n]
-        
-        # 1. Generate all outcomes (Prob, Net Payout)
-        outcomes = calculate_complex_outcomes(
-            current_probs, 
-            current_leg_mults, 
-            payout_structure, 
-            boost_mult
+
+        # First pass: Calculate outcomes without cap to determine stake
+        outcomes_uncapped = calculate_complex_outcomes(
+            current_probs,
+            current_leg_mults,
+            payout_structure,
+            boost_mult,
+            max_boost_amount=0.0,
+            stake=1.0
         )
-        
-        # 2. Calculate Stats
-        ev_decimal = sum(p * n_out for p, n_out in outcomes)
-        
-        # Win Prob (Probability of winning ANY money, i.e. net_outcome > -1)
-        win_prob_any = sum(p for p, n_out in outcomes if n_out > -1.0)
-        
-        # 3. Kelly & Growth
-        f_opt = solve_general_kelly(outcomes)
-        
+
+        # Determine stake from uncapped outcomes
+        f_opt_uncapped = solve_general_kelly(outcomes_uncapped)
         if manual_stake_input > 0:
             used_stake = manual_stake_input
+        else:
+            used_stake = bankroll * f_opt_uncapped * kelly_fraction
+
+        # Second pass: Recalculate outcomes with cap applied using the determined stake
+        if max_boost_dollars > 0 and used_stake > 0:
+            outcomes = calculate_complex_outcomes(
+                current_probs,
+                current_leg_mults,
+                payout_structure,
+                boost_mult,
+                max_boost_amount=max_boost_dollars,
+                stake=used_stake
+            )
+        else:
+            outcomes = outcomes_uncapped
+
+        # Calculate Stats from (potentially capped) outcomes
+        ev_decimal = sum(p * n_out for p, n_out in outcomes)
+
+        # Win Prob (Probability of winning ANY money, i.e. net_outcome > -1)
+        win_prob_any = sum(p for p, n_out in outcomes if n_out > -1.0)
+
+        # Kelly & Growth from capped outcomes
+        f_opt = solve_general_kelly(outcomes)
+
+        if manual_stake_input > 0:
             used_fraction = used_stake / bankroll if bankroll > 0 else 0
         else:
             used_fraction = f_opt * kelly_fraction
             used_stake = bankroll * used_fraction
-            
+
         eg_bps = calculate_expected_growth(outcomes, used_fraction)
         
         results.append({
