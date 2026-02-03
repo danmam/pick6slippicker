@@ -157,11 +157,18 @@ PRESETS = {
         "p6": 34.8, "p6_i": 1.5, "p6_i2": 0.0
     },
     "DK Pick6 NFL": {
-        "p2": 3.4, 
-        "p3": 6.5, 
-        "p4": 12.4, "p4_i": 0.0, 
+        "p2": 3.4,
+        "p3": 6.5,
+        "p4": 12.4, "p4_i": 0.0,
         "p5": 17.7, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 37.6, "p6_i": 1.5, "p6_i2": 0.0
+    },
+    "DK Pick6 NHL": {
+        "p2": 3.4,
+        "p3": 7.6,
+        "p4": 12.4, "p4_i": 0.0,
+        "p5": 17.2, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 33.7, "p6_i": 1.5, "p6_i2": 0.0
     },
     "Ownersbox": {
         "p2": 3.0, 
@@ -213,7 +220,7 @@ st.title("Pick6 & DFS Props EV Optimizer")
 st.sidebar.header("Configuration")
 bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
-manual_stake_input = st.sidebar.number_input("Manual Stake Override ($)", value=0.0, help="Calculates growth based on this specific bet size.")
+max_stake_input = st.sidebar.number_input("Max Stake ($)", value=0.0, help="Cap the recommended stake. If Kelly suggests a smaller stake, it will use Kelly. If Kelly suggests more, it caps at this value.")
 boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
 max_boost_dollars = st.sidebar.number_input("Max Boost $ (0 = unlimited)", value=0.0, step=5.0, help="Cap the boost amount. The payout increase from the boost cannot exceed this dollar amount.")
 
@@ -307,10 +314,12 @@ if st.button("Calculate EV & Stakes", type="primary"):
 
         # Determine stake from uncapped outcomes
         f_opt_uncapped = solve_general_kelly(outcomes_uncapped)
-        if manual_stake_input > 0:
-            used_stake = manual_stake_input
+        kelly_stake = bankroll * f_opt_uncapped * kelly_fraction
+        # Apply max stake cap if specified
+        if max_stake_input > 0:
+            used_stake = min(kelly_stake, max_stake_input)
         else:
-            used_stake = bankroll * f_opt_uncapped * kelly_fraction
+            used_stake = kelly_stake
 
         # Second pass: Recalculate outcomes with cap applied using the determined stake
         if max_boost_dollars > 0 and used_stake > 0:
@@ -333,13 +342,15 @@ if st.button("Calculate EV & Stakes", type="primary"):
 
         # Kelly & Growth from capped outcomes
         f_opt = solve_general_kelly(outcomes)
+        kelly_stake_capped = bankroll * f_opt * kelly_fraction
 
-        if manual_stake_input > 0:
-            used_fraction = used_stake / bankroll if bankroll > 0 else 0
+        # Apply max stake cap if specified
+        if max_stake_input > 0:
+            used_stake = min(kelly_stake_capped, max_stake_input)
         else:
-            used_fraction = f_opt * kelly_fraction
-            used_stake = bankroll * used_fraction
+            used_stake = kelly_stake_capped
 
+        used_fraction = used_stake / bankroll if bankroll > 0 else 0
         eg_bps = calculate_expected_growth(outcomes, used_fraction)
         
         results.append({
@@ -351,8 +362,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
         })
 
     # --- DISPLAY RESULTS ---
-    if manual_stake_input > 0:
-        st.info(f"Showing Expected Growth (EG) for fixed stake: ${manual_stake_input:.2f}")
+    if max_stake_input > 0:
+        st.info(f"Stakes capped at maximum: ${max_stake_input:.2f}")
 
     # Metrics Row
     res_cols = st.columns(5)
