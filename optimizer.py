@@ -60,7 +60,7 @@ def calculate_expected_growth(outcomes, stake_fraction):
         growth_sum += prob * math.log(term)
     return growth_sum * 10000
 
-def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0):
+def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
 
@@ -72,6 +72,8 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
         global_boost: Overall boost multiplier applied to the final payout.
         max_boost_amount: Maximum dollar amount the boost can add to payout (0 = unlimited).
         stake: The stake amount used to calculate the dollar cap on boost.
+        boost_on_gross: If True, boost multiplies the full payout. If False, boost
+                        multiplies only the net profit (payout - 1).
 
     Returns:
         List of (probability, net_outcome) tuples.
@@ -100,7 +102,11 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
             # Calculate unboosted payout (what it would be with global_boost = 1.0)
             unboosted_payout = base_payout * scenario_leg_mult_product
             # Calculate fully boosted payout
-            boosted_payout = unboosted_payout * global_boost
+            if boost_on_gross:
+                boosted_payout = unboosted_payout * global_boost
+            else:
+                # Boost applies only to net profit (payout minus returned stake)
+                boosted_payout = 1.0 + (unboosted_payout - 1.0) * global_boost
 
             # Apply max boost cap if specified
             if max_boost_amount > 0 and stake > 0:
@@ -124,6 +130,45 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
         outcomes.append((scenario_prob, net_outcome))
 
     return outcomes
+
+def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gross, max_boost_amount, stake):
+    """
+    Compute payout details per win tier for display purposes.
+    Assumes leg multipliers = 1.0 (the standard case).
+    """
+    details = []
+    for wins in sorted(payout_structure.keys(), reverse=True):
+        base = payout_structure[wins]
+        if base <= 0:
+            continue
+
+        unboosted = base
+        if boost_on_gross:
+            boosted = unboosted * global_boost
+        else:
+            boosted = 1.0 + (unboosted - 1.0) * global_boost
+
+        boost_delta = boosted - unboosted
+        capped = False
+        effective = boosted
+        if max_boost_amount > 0 and stake > 0:
+            max_delta_per_dollar = max_boost_amount / stake
+            if boost_delta > max_delta_per_dollar:
+                effective = unboosted + max_delta_per_dollar
+                capped = True
+
+        tier_label = f"{wins}/{n_legs}"
+        details.append({
+            'tier': tier_label,
+            'base_mult': base,
+            'boosted_mult': boosted,
+            'effective_mult': effective,
+            'capped': capped,
+            'prize_dollars': effective * stake if stake > 0 else 0,
+            'profit_dollars': (effective - 1) * stake if stake > 0 else 0,
+            'boost_value_dollars': (effective - unboosted) * stake if stake > 0 else 0,
+        })
+    return details
 
 # --- PRESETS DATA ---
 PRESETS = {
@@ -237,6 +282,12 @@ kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
 max_stake_input = st.sidebar.number_input("Max Stake ($)", value=0.0, help="Cap the recommended stake. If Kelly suggests a smaller stake, it will use Kelly. If Kelly suggests more, it caps at this value.")
 boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
 max_boost_dollars = st.sidebar.number_input("Max Boost $ (0 = unlimited)", value=0.0, step=5.0, help="Cap the boost amount. The payout increase from the boost cannot exceed this dollar amount.")
+boost_on_gross = st.sidebar.checkbox(
+    "Boost on gross payout",
+    value=True,
+    help="Checked: boost multiplies the full payout (e.g. 50% boost on 6x → 9x, +800). "
+         "Unchecked: boost multiplies only net profit (e.g. 50% boost on 6x → 1 + 1.5×5 = 8.5x, +750)."
+)
 
 st.sidebar.markdown("---")
 use_std_leg_mults = st.sidebar.checkbox("All leg multipliers 1.0x?", value=True)
@@ -323,7 +374,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
             payout_structure,
             boost_mult,
             max_boost_amount=0.0,
-            stake=1.0
+            stake=1.0,
+            boost_on_gross=boost_on_gross
         )
 
         # Determine stake from uncapped outcomes
@@ -343,7 +395,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
                 payout_structure,
                 boost_mult,
                 max_boost_amount=max_boost_dollars,
-                stake=used_stake
+                stake=used_stake,
+                boost_on_gross=boost_on_gross
             )
         else:
             outcomes = outcomes_uncapped
@@ -366,13 +419,20 @@ if st.button("Calculate EV & Stakes", type="primary"):
 
         used_fraction = used_stake / bankroll if bankroll > 0 else 0
         eg_bps = calculate_expected_growth(outcomes, used_fraction)
-        
+
+        # Compute payout details per win tier for display
+        payout_details = compute_payout_details(
+            payout_structure, n, boost_mult, boost_on_gross,
+            max_boost_dollars, used_stake
+        )
+
         results.append({
             "Size": f"{n}-Pick",
             "EV": ev_decimal,
             "Any Win %": win_prob_any,
             "Stake": used_stake,
-            "EG": eg_bps
+            "EG": eg_bps,
+            "Details": payout_details
         })
 
     # --- DISPLAY RESULTS ---
@@ -389,14 +449,56 @@ if st.button("Calculate EV & Stakes", type="primary"):
             help=f"Stake: ${res['Stake']:.2f}"
         )
 
-    # Detailed Table
+    # Detailed Summary Table
     table_data = []
     for res in results:
-        table_data.append({
+        top_detail = res['Details'][0] if res['Details'] else None
+        row = {
             "Slip Size": res['Size'],
             "EV %": f"{res['EV']*100:.2f}%",
             "Exp. Growth (bps)": f"{res['EG']:.2f}",
             "Rec. Stake": f"${res['Stake']:.2f}",
-            "Hit Rate (Any Prize)": f"{res['Any Win %']*100:.1f}%"
-        })
+            "Hit Rate (Any Prize)": f"{res['Any Win %']*100:.1f}%",
+        }
+        if top_detail and res['Stake'] > 0:
+            row["Top Prize"] = f"${top_detail['prize_dollars']:.2f}"
+            row["Top Profit"] = f"${top_detail['profit_dollars']:.2f}"
+        table_data.append(row)
     st.table(table_data)
+
+    # Payout Breakdown
+    has_boost = boost_mult != 1.0
+    any_capped = any(d['capped'] for res in results for d in res['Details'])
+    has_any_details = any(len(res['Details']) > 0 for res in results)
+
+    if has_any_details:
+        st.subheader("Payout Breakdown")
+        if not use_std_leg_mults:
+            st.caption("ℹ️ Payouts shown assume standard (1.0x) leg multipliers. "
+                       "Actual payouts vary based on which specific legs win.")
+        if has_boost and not boost_on_gross:
+            st.caption("Boost mode: Net — boost applies to profit portion only (payout − stake).")
+        elif has_boost:
+            st.caption("Boost mode: Gross — boost applies to the full payout.")
+
+        breakdown_data = []
+        for res in results:
+            for detail in res['Details']:
+                row = {
+                    "Slip": res['Size'],
+                    "Tier": detail['tier'],
+                    "Base Payout": f"{detail['base_mult']:.2f}x",
+                }
+                if has_boost:
+                    row["Boosted Payout"] = f"{detail['boosted_mult']:.2f}x"
+                    if any_capped:
+                        row["Eff. Payout"] = f"{detail['effective_mult']:.2f}x"
+                        row["Capped?"] = "YES" if detail['capped'] else "No"
+                if res['Stake'] > 0:
+                    row["Prize ($)"] = f"${detail['prize_dollars']:.2f}"
+                    row["Profit ($)"] = f"${detail['profit_dollars']:.2f}"
+                    if has_boost:
+                        row["Boost Value ($)"] = f"${detail['boost_value_dollars']:.2f}"
+                breakdown_data.append(row)
+
+        st.table(breakdown_data)
