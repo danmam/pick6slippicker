@@ -60,7 +60,7 @@ def calculate_expected_growth(outcomes, stake_fraction):
         growth_sum += prob * math.log(term)
     return growth_sum * 10000
 
-def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True):
+def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True, sweat_free=False):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
 
@@ -74,6 +74,8 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
         stake: The stake amount used to calculate the dollar cap on boost.
         boost_on_gross: If True, boost multiplies the full payout. If False, boost
                         multiplies only the net profit (payout - 1).
+        sweat_free: If True, outcomes not defined in payout_structure result in a 
+                    1.0x payout (Refund) instead of 0.0x (Loss).
 
     Returns:
         List of (probability, net_outcome) tuples.
@@ -95,37 +97,52 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
             else:
                 scenario_prob *= (1 - probs[i])
 
-        # Determine Base Payout based on number of wins
-        base_payout = payout_structure.get(wins, 0.0)
+        # Check if this outcome is defined in the payout structure
+        if wins in payout_structure:
+            base_payout = payout_structure[wins]
+            
+            # Normal calculation for defined payouts
+            if base_payout > 0:
+                # Calculate unboosted payout (what it would be with global_boost = 1.0)
+                unboosted_payout = base_payout * scenario_leg_mult_product
+                # Calculate fully boosted payout
+                if boost_on_gross:
+                    boosted_payout = unboosted_payout * global_boost
+                else:
+                    # Boost applies only to net profit (payout minus returned stake)
+                    boosted_payout = 1.0 + (unboosted_payout - 1.0) * global_boost
 
-        if base_payout > 0:
-            # Calculate unboosted payout (what it would be with global_boost = 1.0)
-            unboosted_payout = base_payout * scenario_leg_mult_product
-            # Calculate fully boosted payout
-            if boost_on_gross:
-                boosted_payout = unboosted_payout * global_boost
-            else:
-                # Boost applies only to net profit (payout minus returned stake)
-                boosted_payout = 1.0 + (unboosted_payout - 1.0) * global_boost
+                # Apply max boost cap if specified
+                if max_boost_amount > 0 and stake > 0:
+                    # The boost amount in multiplier terms (per $1 stake)
+                    boost_amount_per_dollar = boosted_payout - unboosted_payout
+                    # The max boost in multiplier terms (per $1 stake)
+                    max_boost_per_dollar = max_boost_amount / stake
 
-            # Apply max boost cap if specified
-            if max_boost_amount > 0 and stake > 0:
-                # The boost amount in multiplier terms (per $1 stake)
-                boost_amount_per_dollar = boosted_payout - unboosted_payout
-                # The max boost in multiplier terms (per $1 stake)
-                max_boost_per_dollar = max_boost_amount / stake
-
-                if boost_amount_per_dollar > max_boost_per_dollar:
-                    # Cap the boost
-                    gross_payout = unboosted_payout + max_boost_per_dollar
+                    if boost_amount_per_dollar > max_boost_per_dollar:
+                        # Cap the boost
+                        gross_payout = unboosted_payout + max_boost_per_dollar
+                    else:
+                        gross_payout = boosted_payout
                 else:
                     gross_payout = boosted_payout
-            else:
-                gross_payout = boosted_payout
 
-            net_outcome = gross_payout - 1.0
+                net_outcome = gross_payout - 1.0
+            else:
+                # Explicit 0.0 payout in structure (rare but possible)
+                net_outcome = -1.0
+                
         else:
-            net_outcome = -1.0 # Loss of stake
+            # Outcome NOT defined in structure (typically a Loss)
+            if sweat_free:
+                # Sweat Free: Refund the stake. 
+                # Assumes refund is exactly 1.0x (no boosts applied to refund).
+                gross_payout = 1.0
+                net_outcome = 0.0
+            else:
+                # Standard: Loss
+                gross_payout = 0.0
+                net_outcome = -1.0
 
         outcomes.append((scenario_prob, net_outcome))
 
@@ -287,6 +304,14 @@ st.sidebar.header("Configuration")
 bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
 max_stake_input = st.sidebar.number_input("Max Stake ($)", value=0.0, help="Cap the recommended stake. If Kelly suggests a smaller stake, it will use Kelly. If Kelly suggests more, it caps at this value.")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Promo Settings")
+sweat_free = st.sidebar.checkbox(
+    "Sweat Free Mode (Refund on Loss)",
+    value=False,
+    help="If checked, any outcome not defined in the payout structure (a loss) returns 1.0x (full stake refund) instead of 0.0x."
+)
 boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
 max_boost_dollars = st.sidebar.number_input("Max Boost $ (0 = unlimited)", value=0.0, step=5.0, help="Cap the boost amount. The payout increase from the boost cannot exceed this dollar amount.")
 boost_on_gross = st.sidebar.checkbox(
@@ -382,7 +407,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
             boost_mult,
             max_boost_amount=0.0,
             stake=1.0,
-            boost_on_gross=boost_on_gross
+            boost_on_gross=boost_on_gross,
+            sweat_free=sweat_free
         )
 
         # Determine stake from uncapped outcomes
@@ -403,7 +429,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
                 boost_mult,
                 max_boost_amount=max_boost_dollars,
                 stake=used_stake,
-                boost_on_gross=boost_on_gross
+                boost_on_gross=boost_on_gross,
+                sweat_free=sweat_free
             )
         else:
             outcomes = outcomes_uncapped
@@ -446,6 +473,9 @@ if st.button("Calculate EV & Stakes", type="primary"):
     if max_stake_input > 0:
         st.info(f"Stakes capped at maximum: ${max_stake_input:.2f}")
 
+    if sweat_free:
+        st.success("Sweat Free Mode Active: Losses (unspecified payouts) are treated as Refunds (1.0x).")
+
     # Metrics Row
     res_cols = st.columns(5)
     for i, res in enumerate(results):
@@ -479,7 +509,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
     has_any_details = any(len(res['Details']) > 0 for res in results)
 
     if has_any_details:
-        st.subheader("Payout Breakdown")
+        st.subheader("Payout Breakdown (Winning Tiers)")
         if not use_std_leg_mults:
             st.caption("ℹ️ Payouts shown assume standard (1.0x) leg multipliers. "
                        "Actual payouts vary based on which specific legs win.")
