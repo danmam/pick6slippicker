@@ -60,7 +60,7 @@ def calculate_expected_growth(outcomes, stake_fraction):
         growth_sum += prob * math.log(term)
     return growth_sum * 10000
 
-def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True, sweat_free=False):
+def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True, sweat_free_fraction=0.0):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
 
@@ -74,8 +74,9 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
         stake: The stake amount used to calculate the dollar cap on boost.
         boost_on_gross: If True, boost multiplies the full payout. If False, boost
                         multiplies only the net profit (payout - 1).
-        sweat_free: If True, outcomes not defined in payout_structure result in a 
-                    1.0x payout (Refund) instead of 0.0x (Loss).
+        sweat_free_fraction: Fraction of stake returned on a complete loss (outcome not in
+                             payout_structure). 0.0 = standard loss, 1.0 = full refund.
+                             Values between give a partial refund.
 
     Returns:
         List of (probability, net_outcome) tuples.
@@ -134,15 +135,9 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
                 
         else:
             # Outcome NOT defined in structure (typically a Loss)
-            if sweat_free:
-                # Sweat Free: Refund the stake. 
-                # Assumes refund is exactly 1.0x (no boosts applied to refund).
-                gross_payout = 1.0
-                net_outcome = 0.0
-            else:
-                # Standard: Loss
-                gross_payout = 0.0
-                net_outcome = -1.0
+            # sweat_free_fraction: 0.0 = full loss, 1.0 = full refund, 0.5 = half stake back
+            gross_payout = sweat_free_fraction
+            net_outcome = sweat_free_fraction - 1.0
 
         outcomes.append((scenario_prob, net_outcome))
 
@@ -276,7 +271,7 @@ PRESETS = {
         "p2": 3.0,
         "p3": 6.0,
         "p4": 6.0, "p4_i": 1.5,
-        "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.5,
+        "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
         "p6": 20.0, "p6_i": 1.5, "p6_i2": 1.0
     },
     "Drafters": {
@@ -300,11 +295,22 @@ max_stake_input = st.sidebar.number_input("Max Stake ($)", value=0.0, help="Cap 
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Promo Settings")
-sweat_free = st.sidebar.checkbox(
+sweat_free_enabled = st.sidebar.checkbox(
     "Sweat Free Mode (Refund on Loss)",
     value=False,
-    help="If checked, any outcome not defined in the payout structure (a loss) returns 1.0x (full stake refund) instead of 0.0x."
+    help="If checked, losses (outcomes not in the payout structure) return a fraction of your stake instead of a full loss."
 )
+if sweat_free_enabled:
+    sweat_free_fraction = st.sidebar.slider(
+        "Loss Refund Fraction",
+        min_value=0.0,
+        max_value=1.0,
+        value=1.0,
+        step=0.05,
+        help="Fraction of stake returned on a complete loss. 1.0 = full refund, 0.5 = half stake back, 0.0 = no refund."
+    )
+else:
+    sweat_free_fraction = 0.0
 boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
 max_boost_dollars = st.sidebar.number_input("Max Boost $ (0 = unlimited)", value=0.0, step=5.0, help="Cap the boost amount. The payout increase from the boost cannot exceed this dollar amount.")
 boost_on_gross = st.sidebar.checkbox(
@@ -401,7 +407,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
             max_boost_amount=0.0,
             stake=1.0,
             boost_on_gross=boost_on_gross,
-            sweat_free=sweat_free
+            sweat_free_fraction=sweat_free_fraction
         )
 
         # Determine stake from uncapped outcomes
@@ -423,7 +429,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
                 max_boost_amount=max_boost_dollars,
                 stake=used_stake,
                 boost_on_gross=boost_on_gross,
-                sweat_free=sweat_free
+                sweat_free_fraction=sweat_free_fraction
             )
         else:
             outcomes = outcomes_uncapped
@@ -466,8 +472,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
     if max_stake_input > 0:
         st.info(f"Stakes capped at maximum: ${max_stake_input:.2f}")
 
-    if sweat_free:
-        st.success("Sweat Free Mode Active: Losses (unspecified payouts) are treated as Refunds (1.0x).")
+    if sweat_free_enabled:
+        st.success(f"Sweat Free Mode Active: Complete losses return {sweat_free_fraction:.0%} of stake ({sweat_free_fraction:.2f}x).")
 
     # Metrics Row
     res_cols = st.columns(5)
