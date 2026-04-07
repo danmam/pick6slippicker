@@ -6,7 +6,7 @@ import math
 def american_to_prob(value):
     try:
         value = float(value)
-        if 0 < value < 100: 
+        if 0 < value < 100:
             return value / 100.0
         if value > 0:
             return 100 / (value + 100)
@@ -30,7 +30,7 @@ def solve_general_kelly(outcomes):
         for p, b in outcomes:
             # Avoid division by zero if f is too high causing 1+fb <= 0
             if 1 + f * b <= 0:
-                return -float('inf') 
+                return -float('inf')
             s += (p * b) / (1 + f * b)
         return s
 
@@ -101,7 +101,7 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
         # Check if this outcome is defined in the payout structure
         if wins in payout_structure:
             base_payout = payout_structure[wins]
-            
+
             # Normal calculation for defined payouts
             if base_payout > 0:
                 # Calculate unboosted payout (what it would be with global_boost = 1.0)
@@ -132,7 +132,7 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
             else:
                 # Explicit 0.0 payout in structure (rare but possible)
                 net_outcome = -1.0
-                
+
         else:
             # Outcome NOT defined in structure (typically a Loss)
             # sweat_free_fraction: 0.0 = full loss, 1.0 = full refund, 0.5 = half stake back
@@ -185,10 +185,22 @@ def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gros
 # --- PRESETS DATA ---
 PRESETS = {
     "Custom": None,
+    "Betr Nukes": {
+        "p2": 6.0,
+        "p3": 10.0,
+        "p4": 20.0, "p4_i": 0.0
+    },
+    "Betr Picks": {
+        "p2": 3.0,
+        "p3": 6.0,
+        "p4": 6.0, "p4_i": 1.5,
+        "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
+        "p6": 20.0, "p6_i": 1.5, "p6_i2": 1.0
+    },
     "DK Pick6 NBA": {
-        "p2": 3.1, 
-        "p3": 6.2, 
-        "p4": 11.1, "p4_i": 0.0, 
+        "p2": 3.1,
+        "p3": 6.2,
+        "p4": 11.1, "p4_i": 0.0,
         "p5": 15.1, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 32.4, "p6_i": 1.5, "p6_i2": 0.0
     },
@@ -200,16 +212,16 @@ PRESETS = {
         "p6": 31.51, "p6_i": 1.5, "p6_i2": 0.0
     },
     "DK Pick6 CBB Promo": {
-        "p2": 2.7, 
-        "p3": 5.78, 
-        "p4": 9.47, "p4_i": 0.0, 
+        "p2": 2.7,
+        "p3": 5.78,
+        "p4": 9.47, "p4_i": 0.0,
         "p5": 18.33, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 37, "p6_i": 1.5, "p6_i2": 0.0
     },
     "DK Pick6 UFC": {
-        "p2": 3.5, 
-        "p3": 6.5, 
-        "p4": 10.4, "p4_i": 0.0, 
+        "p2": 3.5,
+        "p3": 6.5,
+        "p4": 10.4, "p4_i": 0.0,
         "p5": 14.3, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 40.7, "p6_i": 1.5, "p6_i2": 0.0
     },
@@ -248,13 +260,6 @@ PRESETS = {
         "p5": 13.05, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 27.5, "p6_i": 1.5, "p6_i2": 0.0
     },
-    "Ownersbox": {
-        "p2": 3, 
-        "p3": 6.0, 
-        "p4": 6, "p4_i": 1.5, 
-        "p5": 10, "p5_i": 2.5, "p5_i2": 0.0,
-        "p6": 25, "p6_i": 3.0, "p6_i2": 0.0
-    },
     "Prizepicks": {
         "p2": 3.0,
         "p3": 6.0,
@@ -276,18 +281,6 @@ PRESETS = {
         "p5": 12.0, "p5_i": 2.0, "p5_i2": 0.0,
         "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0
     },
-    "Betr Nukes": {
-        "p2": 6.0,
-        "p3": 10.0,
-        "p4": 20.0, "p4_i": 0.0
-    },
-    "Betr Picks": {
-        "p2": 3.0,
-        "p3": 6.0,
-        "p4": 6.0, "p4_i": 1.5,
-        "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
-        "p6": 20.0, "p6_i": 1.5, "p6_i2": 1.0
-    },
     "Drafters": {
         "p2": 3.0,
         "p3": 6.0,
@@ -297,21 +290,66 @@ PRESETS = {
     }
 }
 
+# Max stake defaults per preset (0 means no cap)
+_PRESET_MAX_STAKES = {
+    "Betr Nukes": 20.0,
+    "Betr Picks": 10.0,
+    "Prizepicks": 5.0,
+    "Drafters": 10.0,
+}
+
+# --- SESSION STATE INITIALIZATION ---
+_SS_DEFAULTS = {
+    "boost_mult": 1.0,
+    "max_boost_dollars": 0.0,
+    "max_stake_input": 0.0,
+    "sweat_free_enabled": False,
+    "boost_on_gross": True,
+    "use_std_leg_mults": True,
+}
+for _k, _v in _SS_DEFAULTS.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
 # --- STREAMLIT LAYOUT ---
 st.set_page_config(page_title="Pick6/DFS Optimizer", layout="wide")
 st.title("Pick6 & DFS Props EV Optimizer")
 
 # --- SIDEBAR ---
 st.sidebar.header("Configuration")
+
+# --- PRESET SELECTOR (top of sidebar) ---
+_prev_preset = st.session_state.get("_prev_preset", None)
+selected_preset = st.sidebar.selectbox("Load Payout Preset", list(PRESETS.keys()))
+
+if selected_preset != _prev_preset:
+    st.session_state["_prev_preset"] = selected_preset
+    if selected_preset != "Custom":
+        # Reset promo settings on every new preset selection
+        st.session_state["boost_mult"] = 1.00
+        st.session_state["max_boost_dollars"] = 0.0
+        st.session_state["sweat_free_enabled"] = False
+        st.session_state["boost_on_gross"] = True
+        st.session_state["use_std_leg_mults"] = True
+        st.session_state["max_stake_input"] = _PRESET_MAX_STAKES.get(selected_preset, 0.0)
+        # Load payout multipliers
+        for _key, _val in PRESETS[selected_preset].items():
+            st.session_state[_key] = _val
+
+st.sidebar.markdown("---")
 bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
-max_stake_input = st.sidebar.number_input("Max Stake ($)", value=0.0, help="Cap the recommended stake. If Kelly suggests a smaller stake, it will use Kelly. If Kelly suggests more, it caps at this value.")
+max_stake_input = st.sidebar.number_input(
+    "Max Stake ($)",
+    key="max_stake_input",
+    help="Cap the recommended stake. If Kelly suggests a smaller stake, it will use Kelly. If Kelly suggests more, it caps at this value."
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Promo Settings")
 sweat_free_enabled = st.sidebar.checkbox(
     "Sweat Free Mode (Refund on Loss)",
-    value=False,
+    key="sweat_free_enabled",
     help="If checked, losses (outcomes not in the payout structure) return a fraction of your stake instead of a full loss."
 )
 if sweat_free_enabled:
@@ -325,17 +363,26 @@ if sweat_free_enabled:
     )
 else:
     sweat_free_fraction = 0.0
-boost_mult = st.sidebar.number_input("Global Payout Boost (e.g. 1.1 for 10%)", value=1.0, step=0.05)
-max_boost_dollars = st.sidebar.number_input("Max Boost $ (0 = unlimited)", value=0.0, step=5.0, help="Cap the boost amount. The payout increase from the boost cannot exceed this dollar amount.")
+boost_mult = st.sidebar.number_input(
+    "Global Payout Boost (e.g. 1.1 for 10%)",
+    key="boost_mult",
+    step=0.05
+)
+max_boost_dollars = st.sidebar.number_input(
+    "Max Boost $ (0 = unlimited)",
+    key="max_boost_dollars",
+    step=5.0,
+    help="Cap the boost amount. The payout increase from the boost cannot exceed this dollar amount."
+)
 boost_on_gross = st.sidebar.checkbox(
     "Boost on gross payout",
-    value=True,
+    key="boost_on_gross",
     help="Checked: boost multiplies the full payout (e.g. 50% boost on 6x → 9x, +800). "
          "Unchecked: boost multiplies only net profit (e.g. 50% boost on 6x → 1 + 1.5×5 = 8.5x, +750)."
 )
 
 st.sidebar.markdown("---")
-use_std_leg_mults = st.sidebar.checkbox("All leg multipliers 1.0x?", value=True)
+use_std_leg_mults = st.sidebar.checkbox("All leg multipliers 1.0x?", key="use_std_leg_mults")
 
 leg_mults = [1.0] * 6
 if not use_std_leg_mults:
@@ -343,14 +390,6 @@ if not use_std_leg_mults:
     lm_cols = st.sidebar.columns(3)
     for i in range(6):
         leg_mults[i] = lm_cols[i%3].number_input(f"Leg {i+1} x", value=1.0, step=0.01, format="%.2f")
-
-st.sidebar.markdown("---")
-selected_preset = st.sidebar.selectbox("Load Payout Preset", list(PRESETS.keys()))
-
-if selected_preset != "Custom":
-    data = PRESETS[selected_preset]
-    for key, val in data.items():
-        st.session_state[key] = val
 
 # --- MAIN PAGE ---
 
@@ -396,7 +435,7 @@ for i, col in enumerate(odds_cols):
 
 if st.button("Calculate EV & Stakes", type="primary"):
     results = []
-    
+
     # Define the payout structures for each slip size based on inputs
     # Format: {num_wins: multiplier}
     slip_configs = [
@@ -493,8 +532,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
     res_cols = st.columns(5)
     for i, res in enumerate(results):
         res_cols[i].metric(
-            label=res['Size'], 
-            value=f"{res['EV']*100:.1f}% EV", 
+            label=res['Size'],
+            value=f"{res['EV']*100:.1f}% EV",
             delta=f"{res['EG']:.1f} bps",
             help=f"Stake: ${res['Stake']:.2f}"
         )
