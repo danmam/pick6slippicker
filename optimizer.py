@@ -298,6 +298,43 @@ _PRESET_MAX_STAKES = {
     "Drafters": 10.0,
 }
 
+# --- PROMO PRESETS DATA ---
+# Each entry sets: max_stake_input, boost_mult, max_boost_dollars, boost_on_gross
+# sweat_free_enabled is always False and use_std_leg_mults always True for all promo presets
+PROMO_PRESETS = {
+    "Custom": None,
+    "DK Pick6 30% Boost": {
+        "max_stake_input": 50.0,
+        "boost_mult": 1.30,
+        "max_boost_dollars": 250.0,
+        "boost_on_gross": True,
+    },
+    "DK Pick6 Slashed Line": {
+        "max_stake_input": 20.0,
+        "boost_mult": 1.00,
+        "max_boost_dollars": 0.0,
+        "boost_on_gross": True,
+    },
+    "Betr Picks Discount": {
+        "max_stake_input": 10.0,
+        "boost_mult": 1.00,
+        "max_boost_dollars": 0.0,
+        "boost_on_gross": True,
+    },
+    "Betr Picks 20% Boost": {
+        "max_stake_input": 50.0,
+        "boost_mult": 1.20,
+        "max_boost_dollars": 150.0,
+        "boost_on_gross": False,
+    },
+    "Betr Nukes": {
+        "max_stake_input": 20.0,
+        "boost_mult": 1.00,
+        "max_boost_dollars": 0.0,
+        "boost_on_gross": True,
+    },
+}
+
 # --- SESSION STATE INITIALIZATION ---
 _SS_DEFAULTS = {
     "boost_mult": 1.0,
@@ -335,6 +372,20 @@ if selected_preset != _prev_preset:
         # Load payout multipliers
         for _key, _val in PRESETS[selected_preset].items():
             st.session_state[_key] = _val
+
+# --- PROMO PRESET SELECTOR ---
+_prev_promo = st.session_state.get("_prev_promo_preset", None)
+selected_promo = st.sidebar.selectbox("Load Promo Preset", list(PROMO_PRESETS.keys()))
+
+if selected_promo != _prev_promo:
+    st.session_state["_prev_promo_preset"] = selected_promo
+    if selected_promo != "Custom":
+        data = PROMO_PRESETS[selected_promo]
+        for _key, _val in data.items():
+            st.session_state[_key] = _val
+        # Always reset these for promo presets
+        st.session_state["sweat_free_enabled"] = False
+        st.session_state["use_std_leg_mults"] = True
 
 st.sidebar.markdown("---")
 bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
