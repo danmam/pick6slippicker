@@ -503,18 +503,42 @@ for i, col in enumerate(odds_cols):
     else:
         col.caption(f"{prob*100:.1f}%")
 
+st.markdown("---")
+sc1, sc2, _ = st.columns([1, 1, 2])
+scale_actual = sc1.number_input(
+    "Actual Payout on Slip",
+    value=None,
+    min_value=0.0,
+    placeholder="e.g. 23",
+    help="The top payout shown on your actual slip. Leave blank to use preset values as-is."
+)
+scale_base = sc2.number_input(
+    "Preset Base Payout",
+    value=None,
+    min_value=0.0,
+    placeholder="e.g. 25",
+    help="The top payout from the preset (the value in the payout box above). All multipliers are scaled by Actual ÷ Base."
+)
+
+if scale_actual and scale_base and scale_base > 0:
+    payout_scale = scale_actual / scale_base
+    st.caption(f"Scaling all payouts by {scale_actual}/{scale_base} = {payout_scale:.4f}x")
+else:
+    payout_scale = 1.0
+
 if st.button("Calculate EV & Stakes", type="primary"):
     results = []
 
     # Define the payout structures for each slip size based on inputs
     # Format: {num_wins: multiplier}
+    s = payout_scale
     slip_configs = [
         # (N, payout_dict)
-        (2, {2: p2}),
-        (3, {3: p3}),
-        (4, {4: p4, 3: p4_i}),
-        (5, {5: p5, 4: p5_i, 3: p5_i2}),
-        (6, {6: p6, 5: p6_i, 4: p6_i2}),
+        (2, {2: p2 * s}),
+        (3, {3: p3 * s}),
+        (4, {4: p4 * s, 3: p4_i * s}),
+        (5, {5: p5 * s, 4: p5_i * s, 3: p5_i2 * s}),
+        (6, {6: p6 * s, 5: p6_i * s, 4: p6_i2 * s}),
     ]
 
     for n, payout_structure in slip_configs:
