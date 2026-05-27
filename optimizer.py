@@ -321,7 +321,10 @@ PROMO_PRESETS = {
         "boost_on_gross": True,
     },
     "DK Pick6 Slashed Line": {
-        "max_stake_input": 20.0,
+        "max_stake_input": 0.0,
+        "use_tiered_stakes": True,
+        "max_stake_small": 10.0,
+        "max_stake_large": 20.0,
         "boost_mult": 1.00,
         "max_boost_dollars": 0.0,
         "boost_on_gross": True,
@@ -354,6 +357,9 @@ _SS_DEFAULTS = {
     "sweat_free_enabled": False,
     "boost_on_gross": True,
     "use_std_leg_mults": True,
+    "use_tiered_stakes": False,
+    "max_stake_small": 0.0,
+    "max_stake_large": 0.0,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -379,6 +385,9 @@ if selected_preset != _prev_preset:
         st.session_state["sweat_free_enabled"] = False
         st.session_state["boost_on_gross"] = True
         st.session_state["use_std_leg_mults"] = True
+        st.session_state["use_tiered_stakes"] = False
+        st.session_state["max_stake_small"] = 0.0
+        st.session_state["max_stake_large"] = 0.0
         st.session_state["max_stake_input"] = _PRESET_MAX_STAKES.get(selected_preset, 0.0)
         # Load payout multipliers
         for _key, _val in PRESETS[selected_preset].items():
@@ -391,21 +400,49 @@ selected_promo = st.sidebar.selectbox("Load Promo Preset", list(PROMO_PRESETS.ke
 if selected_promo != _prev_promo:
     st.session_state["_prev_promo_preset"] = selected_promo
     if selected_promo != "Custom":
+        # Reset first so presets can selectively override
+        st.session_state["sweat_free_enabled"] = False
+        st.session_state["use_std_leg_mults"] = True
+        st.session_state["use_tiered_stakes"] = False
+        st.session_state["max_stake_small"] = 0.0
+        st.session_state["max_stake_large"] = 0.0
         data = PROMO_PRESETS[selected_promo]
         for _key, _val in data.items():
             st.session_state[_key] = _val
-        # Always reset these for promo presets
-        st.session_state["sweat_free_enabled"] = False
-        st.session_state["use_std_leg_mults"] = True
 
 st.sidebar.markdown("---")
 bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
-max_stake_input = st.sidebar.number_input(
-    "Max Stake ($)",
-    key="max_stake_input",
-    help="Cap the recommended stake. If Kelly suggests a smaller stake, it will use Kelly. If Kelly suggests more, it caps at this value."
+use_tiered_stakes = st.sidebar.checkbox(
+    "Different max stakes by slip size",
+    key="use_tiered_stakes",
+    help="When checked, set separate max stake caps for 2-3 pick and 4-6 pick slips."
 )
+if use_tiered_stakes:
+    max_stake_input = 0.0
+    _sc1, _sc2 = st.sidebar.columns(2)
+    max_stake_small = _sc1.number_input(
+        "Max: 2-3 picks",
+        key="max_stake_small",
+        min_value=0.0,
+        step=5.0,
+        help="Max stake cap for 2 and 3-pick slips."
+    )
+    max_stake_large = _sc2.number_input(
+        "Max: 4-6 picks",
+        key="max_stake_large",
+        min_value=0.0,
+        step=5.0,
+        help="Max stake cap for 4, 5, and 6-pick slips."
+    )
+else:
+    max_stake_input = st.sidebar.number_input(
+        "Max Stake ($)",
+        key="max_stake_input",
+        help="Cap the recommended stake. If Kelly suggests a smaller stake, it will use Kelly. If Kelly suggests more, it caps at this value."
+    )
+    max_stake_small = 0.0
+    max_stake_large = 0.0
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Promo Settings")
@@ -562,8 +599,9 @@ if st.button("Calculate EV & Stakes", type="primary"):
         f_opt_uncapped = solve_general_kelly(outcomes_uncapped)
         kelly_stake = bankroll * f_opt_uncapped * kelly_fraction
         # Apply max stake cap if specified
-        if max_stake_input > 0:
-            used_stake = min(kelly_stake, max_stake_input)
+        _cap = (max_stake_small if n <= 3 else max_stake_large) if use_tiered_stakes else max_stake_input
+        if _cap > 0:
+            used_stake = min(kelly_stake, _cap)
         else:
             used_stake = kelly_stake
 
@@ -594,8 +632,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
         kelly_stake_capped = bankroll * f_opt * kelly_fraction
 
         # Apply max stake cap if specified
-        if max_stake_input > 0:
-            used_stake = min(kelly_stake_capped, max_stake_input)
+        if _cap > 0:
+            used_stake = min(kelly_stake_capped, _cap)
         else:
             used_stake = kelly_stake_capped
 
@@ -618,7 +656,9 @@ if st.button("Calculate EV & Stakes", type="primary"):
         })
 
     # --- DISPLAY RESULTS ---
-    if max_stake_input > 0:
+    if use_tiered_stakes and (max_stake_small > 0 or max_stake_large > 0):
+        st.info(f"Stakes capped by slip size — 2-3 picks: ${max_stake_small:.2f} | 4-6 picks: ${max_stake_large:.2f}")
+    elif max_stake_input > 0:
         st.info(f"Stakes capped at maximum: ${max_stake_input:.2f}")
 
     if sweat_free_enabled:
