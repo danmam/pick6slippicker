@@ -147,17 +147,20 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
 
     return outcomes
 
-def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gross, max_boost_amount, stake):
+def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gross, max_boost_amount, stake, leg_mult_product=1.0):
     """
     Compute payout details per win tier for display purposes.
-    Assumes leg multipliers = 1.0 (the standard case).
+    Multiplier columns show preset values (no leg mult); prize/profit dollars
+    for the full-win tier are adjusted by leg_mult_product.
     """
     details = []
+    max_delta = (max_boost_amount / stake) if (max_boost_amount > 0 and stake > 0) else None
     for wins in sorted(payout_structure.keys(), reverse=True):
         base = payout_structure[wins]
         if base <= 0:
             continue
 
+        # Display multipliers: preset base only (no leg mult)
         unboosted = base
         if boost_on_gross:
             boosted = unboosted * global_boost
@@ -167,11 +170,23 @@ def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gros
         boost_delta = boosted - unboosted
         capped = False
         effective = boosted
-        if max_boost_amount > 0 and stake > 0:
-            max_delta_per_dollar = max_boost_amount / stake
-            if boost_delta > max_delta_per_dollar:
-                effective = unboosted + max_delta_per_dollar
-                capped = True
+        if max_delta is not None and boost_delta > max_delta:
+            effective = unboosted + max_delta
+            capped = True
+
+        # Dollar amounts: apply leg_mult_product to the full-win tier
+        lmp = leg_mult_product if wins == n_legs else 1.0
+        if lmp != 1.0 and stake > 0:
+            ub_lm = base * lmp
+            if boost_on_gross:
+                b_lm = ub_lm * global_boost
+            else:
+                b_lm = 1.0 + (ub_lm - 1.0) * global_boost
+            eff_lm = b_lm
+            if max_delta is not None and (b_lm - ub_lm) > max_delta:
+                eff_lm = ub_lm + max_delta
+        else:
+            eff_lm = effective
 
         tier_label = f"{wins}/{n_legs}"
         details.append({
@@ -180,8 +195,8 @@ def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gros
             'boosted_mult': boosted,
             'effective_mult': effective,
             'capped': capped,
-            'prize_dollars': effective * stake if stake > 0 else 0,
-            'profit_dollars': (effective - 1) * stake if stake > 0 else 0,
+            'prize_dollars': eff_lm * stake if stake > 0 else 0,
+            'profit_dollars': (eff_lm - 1) * stake if stake > 0 else 0,
             'boost_value_dollars': (effective - unboosted) * stake if stake > 0 else 0,
         })
     return details
@@ -662,9 +677,12 @@ if st.button("Calculate EV & Stakes", type="primary"):
         eg_bps = calculate_expected_growth(outcomes, used_fraction)
 
         # Compute payout details per win tier for display
+        leg_mult_product = 1.0
+        for m in current_leg_mults:
+            leg_mult_product *= m
         payout_details = compute_payout_details(
             payout_structure, n, boost_mult, boost_on_gross,
-            max_boost_dollars, used_stake
+            max_boost_dollars, used_stake, leg_mult_product
         )
 
         results.append({
