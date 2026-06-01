@@ -346,7 +346,7 @@ PRESETS = {
 
 # Max stake defaults per preset (0 means no cap)
 _PRESET_MAX_STAKES = {
-    "Betr Nukes": 20.0,
+    "Betr Nukes": 10.0,
     "Betr Picks": 10.0,
     "Prizepicks": 5.0,
     "Drafters": 10.0,
@@ -378,10 +378,10 @@ PROMO_PRESETS = {
         "max_boost_dollars": 0.0,
         "boost_on_gross": True,
     },
-    "Betr Picks 20% Boost": {
-        "max_stake_input": 50.0,
-        "boost_mult": 1.20,
-        "max_boost_dollars": 150.0,
+    "Betr Picks 23% Boost": {
+        "max_stake_input": 10.0,
+        "boost_mult": 1.23,
+        "max_boost_dollars": 20.0,
         "boost_on_gross": False,
     },
     "Betr Nukes": {
