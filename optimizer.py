@@ -207,155 +207,208 @@ PRESETS = {
     "Betr Nukes": {
         "p2": 6.0,
         "p3": 10.0,
-        "p4": 20.0, "p4_i": 0.0
+        "p4": 20.0, "p4_i": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "Betr Picks": {
         "p2": 3.0,
         "p3": 6.0,
         "p4": 6.0, "p4_i": 1.5,
         "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
-        "p6": 20.0, "p6_i": 1.5, "p6_i2": 1.0
+        "p6": 20.0, "p6_i": 1.5, "p6_i2": 1.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
+    "Dabble": {
+        "p2": 3.0,
+        "p3": 6.0,
+        "p4": 10.0, "p4_i": 0.0,
+        "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
+        "p6": 0.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "DK Pick6 NBA": {
         "p2": 3.05,
         "p3": 6.15,
         "p4": 10.85, "p4_i": 0.0,
         "p5": 14.65, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 30.43, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 30.43, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 56.26, "p7_i": 2.0, "p7_i2": 0.0,
+        "p8": 115.17, "p8_i": 3.0, "p8_i2": 1.0,
     },
     "DK Pick6 NBA Promo": {
         "p2": 3.0,
         "p3": 6.11,
         "p4": 10.25, "p4_i": 0.0,
         "p5": 13.02, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 30.43, "p6_i": 1.5, "p6_i2": 0.0
-    },
-    "DK Pick6 CBB Promo": {
-        "p2": 2.7,
-        "p3": 5.51,
-        "p4": 8.81, "p4_i": 0.0,
-        "p5": 17.74, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0
-    },
-    "DK Pick6 WNBA": {
-        "p2": 3.29,
-        "p3": 5.87,
-        "p4": 11.37, "p4_i": 0.0,
-        "p5": 16.69, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 38.19, "p6_i": 1.5, "p6_i2": 0.0
-    },
-    "DK Pick6 WNBA Promo": {
-        "p2": 2.7,
-        "p3": 5.87,
-        "p4": 9.40, "p4_i": 0.0,
-        "p5": 16.69, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 27.82, "p6_i": 1.5, "p6_i2": 0.0
-    },
-    "DK Pick6 UFC": {
-        "p2": 3.71,
-        "p3": 7.08,
-        "p4": 11.27, "p4_i": 0.0,
-        "p5": 17.13, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 48.61, "p6_i": 1.5, "p6_i2": 0.0
-    },
-    "DK Pick6 NHL": {
-        "p2": 3.82,
-        "p3": 7.06,
-        "p4": 12.74, "p4_i": 0.0,
-        "p5": 16.54, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0
-    },
-    "DK Pick6 NHL Promo": {
-        "p2": 3,
-        "p3": 7.06,
-        "p4": 11.77, "p4_i": 0.0,
-        "p5": 15.29, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 30.43, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 48.68, "p7_i": 2.0, "p7_i2": 0.0,
+        "p8": 112.52, "p8_i": 3.0, "p8_i2": 1.0,
     },
     "DK Pick6 CBB": {
         "p2": 3.22,
         "p3": 5.51,
         "p4": 11.83, "p4_i": 0.0,
         "p5": 21.01, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
+    "DK Pick6 CBB Promo": {
+        "p2": 2.7,
+        "p3": 5.51,
+        "p4": 8.81, "p4_i": 0.0,
+        "p5": 17.74, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
+    "DK Pick6 WNBA": {
+        "p2": 3.29,
+        "p3": 5.87,
+        "p4": 11.37, "p4_i": 0.0,
+        "p5": 16.69, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 38.19, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
+    "DK Pick6 WNBA Promo": {
+        "p2": 2.7,
+        "p3": 5.87,
+        "p4": 9.40, "p4_i": 0.0,
+        "p5": 16.69, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 27.82, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
+    "DK Pick6 UFC": {
+        "p2": 3.71,
+        "p3": 7.08,
+        "p4": 11.27, "p4_i": 0.0,
+        "p5": 17.13, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 48.61, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
+    "DK Pick6 NHL": {
+        "p2": 3.82,
+        "p3": 7.06,
+        "p4": 12.74, "p4_i": 0.0,
+        "p5": 16.54, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
+    "DK Pick6 NHL Promo": {
+        "p2": 3,
+        "p3": 7.06,
+        "p4": 11.77, "p4_i": 0.0,
+        "p5": 15.29, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "DK Pick6 PGA": {
         "p2": 3.27,
         "p3": 6.12,
         "p4": 12.04, "p4_i": 0.0,
         "p5": 15.03, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 24.66, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 24.66, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "DK Pick6 MLB": {
         "p2": 3.37,
         "p3": 6.60,
         "p4": 10.83, "p4_i": 0.0,
         "p5": 15.61, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 39.23, "p7_i": 2.0, "p7_i2": 0.0,
+        "p8": 66.89, "p8_i": 3.0, "p8_i2": 1.0,
     },
     "DK Pick6 MLB Promo": {
         "p2": 3.0,
         "p3": 6.60,
         "p4": 10.83, "p4_i": 0.0,
         "p5": 13.00, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 27.10, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 27.10, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "DK Pick6 Soccer": {
         "p2": 3.63,
         "p3": 6.73,
         "p4": 12.60, "p4_i": 0.0,
         "p5": 21.82, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 34.52, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 34.52, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "DK Pick6 Soccer Promo": {
         "p2": 3,
         "p3": 6.66,
         "p4": 12.23, "p4_i": 0.0,
         "p5": 15.12, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 34.52, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 34.52, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "DK Pick6 CS2": {
         "p2": 3.1,
         "p3": 5.27,
         "p4": 8.16, "p4_i": 0.0,
         "p5": 14.94, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 20.29, "p6_i": 1.5, "p6_i2": 0.0
+        "p6": 20.29, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "DK Pick6 CS2 Promo": {
         "p2": 2.5,
         "p3": 4.94,
         "p4": 7.90, "p4_i": 0.0,
         "p5": 0.00, "p5_i": 0.0, "p5_i2": 0.0,
-        "p6": 0.00, "p6_i": 0.0, "p6_i2": 0.0
+        "p6": 0.00, "p6_i": 0.0, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "Prizepicks": {
         "p2": 3.0,
         "p3": 6.0,
         "p4": 6.0, "p4_i": 1.5,
         "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
-        "p6": 25.0, "p6_i": 2.0, "p6_i2": 0.4
+        "p6": 25.0, "p6_i": 2.0, "p6_i2": 0.4,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "RTSports (Mulligan)": {
         "p2": 3.0,
         "p3": 6.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 12.0, "p5_i": 2.0, "p5_i2": 0.0,
-        "p6": 25.0, "p6_i": 2.5, "p6_i2": 0.0
+        "p6": 25.0, "p6_i": 2.5, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "RTSports (Power)": {
         "p2": 3.0,
         "p3": 6.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 12.0, "p5_i": 2.0, "p5_i2": 0.0,
-        "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0
+        "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "Drafters": {
         "p2": 3.0,
         "p3": 6.0,
         "p4": 4.0, "p4_i": 2.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
-        "p6": 10.0, "p6_i": 2.5, "p6_i2": 1.5
-    }
+        "p6": 10.0, "p6_i": 2.5, "p6_i2": 1.5,
+        "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 50.0, "p8_i": 5.0, "p8_i2": 2.5,
+    },
 }
 
 # Max stake defaults per preset (0 means no cap)
@@ -417,6 +470,9 @@ _SS_DEFAULTS = {
     "use_tiered_stakes": False,
     "max_stake_small": 0.0,
     "max_stake_large": 0.0,
+    "show_78": False,
+    "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+    "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -470,10 +526,13 @@ if selected_promo != _prev_promo:
 st.sidebar.markdown("---")
 bankroll = st.sidebar.number_input("Bankroll ($)", value=8000.0)
 kelly_fraction = st.sidebar.slider("Kelly Fraction", 0.0, 1.0, 0.25)
+_tiered_help = (
+    "When checked, set separate max stake caps for 2-3 pick and 4-8 pick slips."
+)
 use_tiered_stakes = st.sidebar.checkbox(
     "Different max stakes by slip size",
     key="use_tiered_stakes",
-    help="When checked, set separate max stake caps for 2-3 pick and 4-6 pick slips."
+    help=_tiered_help,
 )
 if use_tiered_stakes:
     max_stake_input = 0.0
@@ -486,11 +545,11 @@ if use_tiered_stakes:
         help="Max stake cap for 2 and 3-pick slips."
     )
     max_stake_large = _sc2.number_input(
-        "Max: 4-6 picks",
+        "Max: 4-8 picks",
         key="max_stake_large",
         min_value=0.0,
         step=5.0,
-        help="Max stake cap for 4, 5, and 6-pick slips."
+        help="Max stake cap for 4, 5, 6, 7, and 8-pick slips."
     )
 else:
     max_stake_input = st.sidebar.number_input(
@@ -548,12 +607,14 @@ boost_on_gross = st.sidebar.checkbox(
 st.sidebar.markdown("---")
 use_std_leg_mults = st.sidebar.checkbox("All leg multipliers 1.0x?", key="use_std_leg_mults")
 
-leg_mults = [1.0] * 6
+_show_78_sidebar = st.session_state.get("show_78", False)
+_n_leg_inputs = 8 if _show_78_sidebar else 6
+leg_mults = [1.0] * 8
 if not use_std_leg_mults:
     st.sidebar.subheader("Individual Leg Multipliers")
     lm_cols = st.sidebar.columns(3)
-    for i in range(6):
-        leg_mults[i] = lm_cols[i%3].number_input(f"Leg {i+1} x", value=1.0, step=0.01, format="%.2f")
+    for i in range(_n_leg_inputs):
+        leg_mults[i] = lm_cols[i % 3].number_input(f"Leg {i+1} x", value=1.0, step=0.01, format="%.2f")
 
 # --- MAIN PAGE ---
 
@@ -585,8 +646,38 @@ with c5:
     p6_i = col_b.number_input("5/6", value=st.session_state.get("p6_i", 0.0), key="p6_i")
     p6_i2 = col_c.number_input("4/6", value=st.session_state.get("p6_i2", 0.0), key="p6_i2")
 
+# Toggle for 7-Pick and 8-Pick options
+show_78 = st.checkbox(
+    "Show 7-Pick & 8-Pick options",
+    key="show_78",
+    help="Reveal payout inputs and leg odds for 7 and 8-pick slips."
+)
+
+if show_78:
+    c6, c7 = st.columns(2)
+    with c6:
+        st.markdown("**7-Pick**")
+        col_a, col_b, col_c = st.columns(3)
+        p7 = col_a.number_input("7/7", value=st.session_state.get("p7", 0.0), key="p7")
+        p7_i = col_b.number_input("6/7", value=st.session_state.get("p7_i", 0.0), key="p7_i")
+        p7_i2 = col_c.number_input("5/7", value=st.session_state.get("p7_i2", 0.0), key="p7_i2")
+    with c7:
+        st.markdown("**8-Pick**")
+        col_a, col_b, col_c = st.columns(3)
+        p8 = col_a.number_input("8/8", value=st.session_state.get("p8", 0.0), key="p8")
+        p8_i = col_b.number_input("7/8", value=st.session_state.get("p8_i", 0.0), key="p8_i")
+        p8_i2 = col_c.number_input("6/8", value=st.session_state.get("p8_i2", 0.0), key="p8_i2")
+else:
+    p7 = st.session_state.get("p7", 0.0)
+    p7_i = st.session_state.get("p7_i", 0.0)
+    p7_i2 = st.session_state.get("p7_i2", 0.0)
+    p8 = st.session_state.get("p8", 0.0)
+    p8_i = st.session_state.get("p8_i", 0.0)
+    p8_i2 = st.session_state.get("p8_i2", 0.0)
+
 st.header("2. Play Odds (Win Probability)")
-odds_cols = st.columns(6)
+_n_odds = 8 if show_78 else 6
+odds_cols = st.columns(_n_odds)
 probs = []
 for i, col in enumerate(odds_cols):
     val = col.text_input(f"Leg {i+1} Odds", value="-110", key=f"l{i}")
@@ -634,6 +725,9 @@ if st.button("Calculate EV & Stakes", type="primary"):
         (5, {5: p5 * s, 4: p5_i * s, 3: p5_i2 * s}),
         (6, {6: p6 * s, 5: p6_i * s, 4: p6_i2 * s}),
     ]
+    if show_78:
+        slip_configs.append((7, {7: p7 * s, 6: p7_i * s, 5: p7_i2 * s}))
+        slip_configs.append((8, {8: p8 * s, 7: p8_i * s, 6: p8_i2 * s}))
 
     for n, payout_structure in slip_configs:
         current_probs = probs[:n]
@@ -717,7 +811,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
 
     # --- DISPLAY RESULTS ---
     if use_tiered_stakes and (max_stake_small > 0 or max_stake_large > 0):
-        st.info(f"Stakes capped by slip size — 2-3 picks: ${max_stake_small:.2f} | 4-6 picks: ${max_stake_large:.2f}")
+        _large_label = "4-8 picks" if show_78 else "4-6 picks"
+        st.info(f"Stakes capped by slip size — 2-3 picks: ${max_stake_small:.2f} | {_large_label}: ${max_stake_large:.2f}")
     elif max_stake_input > 0:
         st.info(f"Stakes capped at maximum: ${max_stake_input:.2f}")
 
@@ -728,7 +823,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
             st.success(f"Refund on Loss: Complete losses return {sweat_free_fraction:.0%} of stake.")
 
     # Metrics Row
-    res_cols = st.columns(5)
+    res_cols = st.columns(len(results))
     for i, res in enumerate(results):
         res_cols[i].metric(
             label=res['Size'],
