@@ -452,9 +452,9 @@ _PRESET_MAX_STAKES = {
 PROMO_PRESETS = {
     "Custom": None,
     "DK Pick6 30% Boost": {
-        "max_stake_input": 50.0,
+        "max_stake_input": 25.0,
         "boost_mult": 1.30,
-        "max_boost_dollars": 250.0,
+        "max_boost_dollars": 150.0,
         "boost_on_gross": True,
     },
     "DK Pick6 Slashed Line": {
@@ -479,7 +479,7 @@ PROMO_PRESETS = {
         "boost_on_gross": False,
     },
     "Betr Nukes": {
-        "max_stake_input": 20.0,
+        "max_stake_input": 10.0,
         "boost_mult": 1.00,
         "max_boost_dollars": 0.0,
         "boost_on_gross": True,
