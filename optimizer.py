@@ -60,7 +60,7 @@ def calculate_expected_growth(outcomes, stake_fraction):
         growth_sum += prob * math.log(term)
     return growth_sum * 10000
 
-def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True, sweat_free_fraction=0.0, stake_back_on_win=False, topup_partial_wins=True):
+def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True, sweat_free_fraction=0.0, stake_back_on_win=False, refund_partial_wins=True):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
 
@@ -77,15 +77,16 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
         sweat_free_fraction: Fraction of stake returned on a complete loss (outcome not in
                              payout_structure). 0.0 = standard loss, 1.0 = full refund.
                              Values between give a partial refund.
-        stake_back_on_win: If True, sweat_free_fraction is also added to winning outcomes
-                           (stake is returned on top of the payout, win or lose).
-        topup_partial_wins: Only relevant when stake_back_on_win is True. For winning tiers
-                            that pay out less than the stake (e.g. a 0.4x payout), True
-                            (default) tops the payout up by sweat_free_fraction of the
-                            shortfall, so a full (1.0) stake back makes the outcome breakeven
-                            instead of stacking a full extra stake on top of a small payout.
-                            False leaves partial-win tiers untouched, so they can still lose
-                            part of the stake.
+        stake_back_on_win: If True, sweat_free_fraction is also stacked on top of winning
+                           tiers whose payout already covers the stake (gross_payout >= 1.0),
+                           so a full win pays out its normal payout plus a full extra stake.
+        refund_partial_wins: For winning tiers that pay out less than the stake (e.g. a 0.4x
+                            payout, a net 0.7x loss), True (default) tops the payout up by
+                            sweat_free_fraction of the shortfall, so a full (1.0) refund makes
+                            the outcome breakeven. False leaves partial-win tiers untouched, so
+                            they can still lose part of the stake. Applies independently of
+                            stake_back_on_win, so partial win/loss tiers can be refunded even
+                            when only "Refund on Loss" behavior is otherwise wanted.
 
     Returns:
         List of (probability, net_outcome) tuples.
@@ -140,19 +141,19 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
                 # Explicit 0.0 payout in structure (rare but possible)
                 gross_payout = 0.0
 
-            if stake_back_on_win:
-                if gross_payout < 1.0:
-                    # Partial win: the payout alone is worth less than the stake.
-                    if topup_partial_wins:
-                        # Make up the shortfall (scaled by sweat_free_fraction) so a
-                        # full stake back (1.0) breaks even instead of stacking a full
-                        # extra stake on top of a small payout.
-                        gross_payout += (1.0 - gross_payout) * sweat_free_fraction
-                    # else: no stake back on partial wins; the shortfall stands.
-                else:
-                    # Full win (payout already covers the stake): stake back stacks
-                    # a full extra stake on top, as before.
-                    gross_payout += sweat_free_fraction
+            if gross_payout < 1.0:
+                # Partial win/loss: the payout alone is worth less than the stake.
+                # Refunding this is independent of stake_back_on_win, so it also
+                # applies under "Refund on Loss" when explicitly enabled.
+                if refund_partial_wins:
+                    # Make up the shortfall (scaled by sweat_free_fraction) so a
+                    # full refund (1.0) breaks even instead of leaving the loss
+                    # on a small payout untouched.
+                    gross_payout += (1.0 - gross_payout) * sweat_free_fraction
+            elif stake_back_on_win:
+                # Full win (payout already covers the stake): "Stake Back Win or
+                # Lose" stacks a full extra stake on top, as before.
+                gross_payout += sweat_free_fraction
 
             net_outcome = gross_payout - 1.0
 
@@ -648,22 +649,22 @@ if sweat_free_enabled:
         help="Fraction of stake returned. 1.0 = full stake back, 0.5 = half stake back."
     )
     stake_back_on_win = (sweat_free_mode == "Stake Back Win or Lose")
-    if stake_back_on_win:
-        topup_partial_wins = st.sidebar.checkbox(
-            "Top up partial wins to breakeven",
-            value=True,
-            key="topup_partial_wins",
-            help="If checked (default), winning tiers that pay less than your stake (e.g. a "
-                 "0.4x payout) are topped up by the refund fraction, so a full stake back "
-                 "makes the outcome breakeven. If unchecked, partial wins get no stake back "
-                 "and can still lose part of the stake."
-        )
-    else:
-        topup_partial_wins = True
+    refund_partial_wins = st.sidebar.checkbox(
+        "Stake Back on Partial Win/Loss",
+        value=True,
+        key="refund_partial_wins",
+        help="If checked (default), winning tiers that pay less than your stake (e.g. a 0.3x "
+             "payout, a net 0.7x loss) are topped up by the refund fraction toward breakeven. "
+             "Works under both modes: with Refund on Loss, it extends the refund to defined "
+             "partial win/loss tiers instead of just complete losses. With Stake Back Win or "
+             "Lose, full win tiers separately still get the full fraction stacked on top "
+             "regardless of this setting. If unchecked, partial win/loss tiers get no top-up "
+             "and can still lose part of the stake."
+    )
 else:
     sweat_free_fraction = 0.0
     stake_back_on_win = False
-    topup_partial_wins = True
+    refund_partial_wins = True
 boost_mult = st.sidebar.number_input(
     "Global Payout Boost (e.g. 1.1 for 10%)",
     key="boost_mult",
@@ -822,7 +823,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
             boost_on_gross=boost_on_gross,
             sweat_free_fraction=sweat_free_fraction,
             stake_back_on_win=stake_back_on_win,
-            topup_partial_wins=topup_partial_wins
+            refund_partial_wins=refund_partial_wins
         )
 
         # Determine stake from uncapped outcomes
@@ -847,7 +848,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
                 boost_on_gross=boost_on_gross,
                 sweat_free_fraction=sweat_free_fraction,
                 stake_back_on_win=stake_back_on_win,
-                topup_partial_wins=topup_partial_wins
+                refund_partial_wins=refund_partial_wins
             )
         else:
             outcomes = outcomes_uncapped
@@ -898,12 +899,15 @@ if st.button("Calculate EV & Stakes", type="primary"):
 
     if sweat_free_enabled:
         if stake_back_on_win:
-            if topup_partial_wins:
+            if refund_partial_wins:
                 st.success(f"Stake Back Win or Lose: {sweat_free_fraction:.0%} of stake returned on losses and full wins; partial wins topped up to breakeven.")
             else:
                 st.success(f"Stake Back Win or Lose: {sweat_free_fraction:.0%} of stake returned on losses and full wins; partial wins get no top-up and can still lose stake.")
         else:
-            st.success(f"Refund on Loss: Complete losses return {sweat_free_fraction:.0%} of stake.")
+            if refund_partial_wins:
+                st.success(f"Refund on Loss: Complete losses return {sweat_free_fraction:.0%} of stake; partial win/loss tiers topped up toward breakeven.")
+            else:
+                st.success(f"Refund on Loss: Complete losses return {sweat_free_fraction:.0%} of stake.")
 
     # Metrics Row
     res_cols = st.columns(len(results))
