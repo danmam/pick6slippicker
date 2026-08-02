@@ -455,6 +455,15 @@ PRESETS = {
         "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 50.0, "p8_i": 5.0, "p8_i2": 2.5,
     },
+    "Underdog Fantasy": {
+        "p2": 3.5,
+        "p3": 6.5,
+        "p4": 7.2, "p4_i": 1.8,
+        "p5": 0.0, "p5_i": 0.0, "p5_i2": 0.0,
+        "p6": 0.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
 }
 
 # Max stake defaults per preset (0 means no cap)
@@ -463,6 +472,7 @@ _PRESET_MAX_STAKES = {
     "Betr Picks": 10.0,
     "Prizepicks": 5.0,
     "Drafters": 10.0,
+    "Underdog Fantasy": 25.0,
 }
 
 # --- PROMO PRESETS DATA ---
