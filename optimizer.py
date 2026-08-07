@@ -167,14 +167,27 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
 
     return outcomes
 
-def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gross, max_boost_amount, stake, leg_mult_product=1.0):
+def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gross, max_boost_amount, stake, leg_mult_product=1.0, sweat_free_fraction=0.0, stake_back_on_win=False, refund_partial_wins=True):
     """
     Compute payout details per win tier for display purposes.
     Multiplier columns show preset values (no leg mult); prize/profit dollars
-    for the full-win tier are adjusted by leg_mult_product.
+    for the full-win tier are adjusted by leg_mult_product. Prize/profit dollars
+    also apply the stake-back/refund settings, mirroring calculate_complex_outcomes,
+    so a partial-win tier topped up to breakeven shows correctly here too.
     """
     details = []
     max_delta = (max_boost_amount / stake) if (max_boost_amount > 0 and stake > 0) else None
+
+    def apply_refund(payout_mult):
+        # Mirrors the stake-back/refund adjustment in calculate_complex_outcomes.
+        if payout_mult < 1.0:
+            if refund_partial_wins:
+                return payout_mult + (1.0 - payout_mult) * sweat_free_fraction
+            return payout_mult
+        elif stake_back_on_win:
+            return payout_mult + sweat_free_fraction
+        return payout_mult
+
     for wins in sorted(payout_structure.keys(), reverse=True):
         base = payout_structure[wins]
         if base <= 0:
@@ -208,6 +221,10 @@ def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gros
         else:
             eff_lm = effective
 
+        # Apply stake-back/refund to the dollar amounts (boost_value_dollars stays
+        # boost-only, so it doesn't conflate the two adjustments).
+        refunded_eff_lm = apply_refund(eff_lm)
+
         tier_label = f"{wins}/{n_legs}"
         details.append({
             'tier': tier_label,
@@ -215,8 +232,8 @@ def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gros
             'boosted_mult': boosted,
             'effective_mult': effective,
             'capped': capped,
-            'prize_dollars': eff_lm * stake if stake > 0 else 0,
-            'profit_dollars': (eff_lm - 1) * stake if stake > 0 else 0,
+            'prize_dollars': refunded_eff_lm * stake if stake > 0 else 0,
+            'profit_dollars': (refunded_eff_lm - 1) * stake if stake > 0 else 0,
             'boost_value_dollars': (effective - unboosted) * stake if stake > 0 else 0,
         })
     return details
@@ -878,7 +895,10 @@ if st.button("Calculate EV & Stakes", type="primary"):
             leg_mult_product *= m
         payout_details = compute_payout_details(
             payout_structure, n, boost_mult, boost_on_gross,
-            max_boost_dollars, used_stake, leg_mult_product
+            max_boost_dollars, used_stake, leg_mult_product,
+            sweat_free_fraction=sweat_free_fraction,
+            stake_back_on_win=stake_back_on_win,
+            refund_partial_wins=refund_partial_wins
         )
 
         results.append({
