@@ -15,6 +15,49 @@ def american_to_prob(value):
     except ValueError:
         return 0.0
 
+# --- LEG MULTIPLIER FORMATS ---
+# Most sites express a leg modifier on a 1.0x scale: 1.0x means "unmodified"
+# and the slip payout is scaled by the product of the leg values.
+#
+# Underdog Fantasy instead displays the *price* of each leg, where an
+# unmodified leg prices at 1.87x. Those prices are NOT proportional to the
+# 1.0x scale -- dividing by 1.87 undershoots every observed slip:
+#   1.87 + 2.02  ->  3.81x  (3.5x unmodified;  3.5 * 2.02/1.87 = 3.78x)
+#   1.87 + 2.04  ->  3.85x  (3.5x unmodified;  3.5 * 2.04/1.87 = 3.82x)
+#   1.87 + 1.87 + 2.04 -> 7.15x  (6.5x unmodified; 6.5 * 2.04/1.87 = 7.09x)
+# The prices fit an affine map instead -- every price carries a fixed offset
+# that does not scale with the modifier:
+#   price = SHIFT + (BASE - SHIFT) * mult      (BASE = 1.87, SHIFT = 0.17)
+#   mult  = (price - SHIFT) / (BASE - SHIFT)
+# giving 1.87x -> 1.000x, 2.02x -> 1.088x, 2.04x -> 1.100x, which reproduces
+# all three observed payouts exactly (3.5 * 1.088 = 3.81, 3.5 * 1.1 = 3.85,
+# 6.5 * 1.1 = 7.15). Offsets in [0.157, 0.183] fit the same data; 0.17 is the
+# value that lands the observed prices on round modifiers (2.04x = 1.10x).
+UNDERDOG_BASE_PRICE = 1.87   # displayed price of an unmodified (1.0x) leg
+UNDERDOG_PRICE_SHIFT = 0.17  # fixed portion of a leg price that does not scale
+
+
+def underdog_price_to_leg_mult(price, base=UNDERDOG_BASE_PRICE, shift=UNDERDOG_PRICE_SHIFT):
+    """Convert an Underdog-style leg price (e.g. 2.04x) to a 1.0x-scale multiplier."""
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return 1.0
+    denom = float(base) - float(shift)
+    if denom <= 0:
+        return 1.0
+    return max(0.0, (price - float(shift)) / denom)
+
+
+def leg_mult_to_underdog_price(mult, base=UNDERDOG_BASE_PRICE, shift=UNDERDOG_PRICE_SHIFT):
+    """Inverse of underdog_price_to_leg_mult: 1.0x-scale multiplier -> leg price."""
+    try:
+        mult = float(mult)
+    except (TypeError, ValueError):
+        return float(base)
+    return float(shift) + (float(base) - float(shift)) * mult
+
+
 def solve_general_kelly(outcomes):
     """
     Solves for optimal Kelly fraction 'f' given a list of (probability, net_odds) tuples.
@@ -493,6 +536,12 @@ PRESETS = {
     },
 }
 
+# Leg-multiplier input format per preset. Presets not listed use the standard
+# 1.0x scale; "underdog" presets take leg prices as Underdog displays them.
+_PRESET_LEG_MULT_FORMATS = {
+    "Underdog Fantasy": "underdog",
+}
+
 # Max stake defaults per preset (0 means no cap)
 _PRESET_MAX_STAKES = {
     "Betr Nukes": 10.0,
@@ -550,6 +599,9 @@ _SS_DEFAULTS = {
     "sweat_free_enabled": False,
     "boost_on_gross": True,
     "use_std_leg_mults": True,
+    "leg_mult_format": "standard",
+    "ud_base_price": UNDERDOG_BASE_PRICE,
+    "ud_price_shift": UNDERDOG_PRICE_SHIFT,
     "use_tiered_stakes": False,
     "max_stake_small": 0.0,
     "max_stake_large": 0.0,
@@ -581,6 +633,7 @@ if selected_preset != _prev_preset:
         st.session_state["sweat_free_enabled"] = False
         st.session_state["boost_on_gross"] = True
         st.session_state["use_std_leg_mults"] = True
+        st.session_state["leg_mult_format"] = _PRESET_LEG_MULT_FORMATS.get(selected_preset, "standard")
         st.session_state["use_tiered_stakes"] = False
         st.session_state["max_stake_small"] = 0.0
         st.session_state["max_stake_large"] = 0.0
@@ -701,16 +754,73 @@ boost_on_gross = st.sidebar.checkbox(
 )
 
 st.sidebar.markdown("---")
-use_std_leg_mults = st.sidebar.checkbox("All leg multipliers 1.0x?", key="use_std_leg_mults")
+_leg_format = st.session_state.get("leg_mult_format", "standard")
+_ud_format = _leg_format == "underdog"
+_ud_base = float(st.session_state.get("ud_base_price", UNDERDOG_BASE_PRICE))
+_ud_shift = float(st.session_state.get("ud_price_shift", UNDERDOG_PRICE_SHIFT))
+
+use_std_leg_mults = st.sidebar.checkbox(
+    f"All legs at standard price ({_ud_base:.2f}x)?" if _ud_format else "All leg multipliers 1.0x?",
+    key="use_std_leg_mults",
+    help="Underdog prices every leg, so an unmodified leg still shows a multiplier "
+         f"({_ud_base:.2f}x). Check this when no leg is boosted or discounted."
+         if _ud_format else None
+)
 
 _show_78_sidebar = st.session_state.get("show_78", False)
 _n_leg_inputs = 8 if _show_78_sidebar else 6
 leg_mults = [1.0] * 8
+leg_inputs = [_ud_base if _ud_format else 1.0] * 8
+
 if not use_std_leg_mults:
-    st.sidebar.subheader("Individual Leg Multipliers")
+    st.sidebar.selectbox(
+        "Leg multiplier format",
+        options=["standard", "underdog"],
+        key="leg_mult_format",
+        format_func=lambda v: "Standard (1.0x = unmodified)" if v == "standard"
+                              else f"Underdog leg price ({_ud_base:.2f}x = unmodified)",
+        help="Underdog Fantasy shows each leg's price instead of a 1.0x-scale modifier. "
+             "Picking that format lets you type the prices straight off the slip."
+    )
+    _ud_format = st.session_state["leg_mult_format"] == "underdog"
+
+    if _ud_format:
+        with st.sidebar.expander("Leg price scale"):
+            st.caption(
+                "Leg price = offset + (unmodified price − offset) × modifier. "
+                "Defaults reproduce Underdog's published payouts: 2.02x → 1.088x, "
+                "2.04x → 1.100x, so 1.87x + 2.04x pays 3.5 × 1.1 = 3.85x."
+            )
+            _ud_base = st.number_input(
+                "Unmodified leg price", key="ud_base_price", step=0.01, format="%.2f"
+            )
+            _ud_shift = st.number_input(
+                "Price offset", key="ud_price_shift", step=0.01, format="%.2f"
+            )
+            if _ud_base - _ud_shift <= 0:
+                st.warning("Unmodified price must exceed the offset; using defaults.")
+                _ud_base, _ud_shift = UNDERDOG_BASE_PRICE, UNDERDOG_PRICE_SHIFT
+
+    st.sidebar.subheader("Individual Leg Prices" if _ud_format else "Individual Leg Multipliers")
     lm_cols = st.sidebar.columns(3)
     for i in range(_n_leg_inputs):
-        leg_mults[i] = lm_cols[i % 3].number_input(f"Leg {i+1} x", value=1.0, step=0.01, format="%.2f")
+        if _ud_format:
+            leg_inputs[i] = lm_cols[i % 3].number_input(
+                f"Leg {i+1} price", value=float(_ud_base), step=0.01, format="%.2f",
+                key=f"ud_leg_price_{i}"
+            )
+            leg_mults[i] = underdog_price_to_leg_mult(leg_inputs[i], _ud_base, _ud_shift)
+        else:
+            leg_mults[i] = lm_cols[i % 3].number_input(
+                f"Leg {i+1} x", value=1.0, step=0.01, format="%.2f", key=f"leg_mult_{i}"
+            )
+            leg_inputs[i] = leg_mults[i]
+
+    if _ud_format:
+        st.sidebar.caption(
+            "Converted to 1.0x scale: "
+            + ", ".join(f"{m:.3f}x" for m in leg_mults[:_n_leg_inputs])
+        )
 
 # --- MAIN PAGE ---
 
@@ -779,7 +889,9 @@ for i, col in enumerate(odds_cols):
     val = col.text_input(f"Leg {i+1} Odds", value="-110", key=f"l{i}")
     prob = american_to_prob(val)
     probs.append(prob)
-    if not use_std_leg_mults:
+    if not use_std_leg_mults and _ud_format:
+        col.caption(f"{prob*100:.1f}% | {leg_inputs[i]:.2f}x → x{leg_mults[i]:.3f}")
+    elif not use_std_leg_mults:
         col.caption(f"{prob*100:.1f}% | x{leg_mults[i]}")
     else:
         col.caption(f"{prob*100:.1f}%")
@@ -964,7 +1076,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
     if has_any_details:
         st.subheader("Payout Breakdown (Winning Tiers)")
         if not use_std_leg_mults:
-            st.caption("ℹ️ Payouts shown assume standard (1.0x) leg multipliers. "
+            _std_leg_label = f"standard ({_ud_base:.2f}x) leg prices" if _ud_format else "standard (1.0x) leg multipliers"
+            st.caption(f"ℹ️ Payouts shown assume {_std_leg_label}. "
                        "Actual payouts vary based on which specific legs win.")
         if has_boost and not boost_on_gross:
             st.caption("Boost mode: Net — boost applies to profit portion only (payout − stake).")
