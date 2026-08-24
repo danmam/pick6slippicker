@@ -22,17 +22,26 @@ def american_to_prob(value):
 # Underdog Fantasy instead displays the *price* of each leg, where an
 # unmodified leg prices at 1.87x. Those prices are NOT proportional to the
 # 1.0x scale -- dividing by 1.87 undershoots every observed slip:
-#   1.87 + 2.02  ->  3.81x  (3.5x unmodified;  3.5 * 2.02/1.87 = 3.78x)
-#   1.87 + 2.04  ->  3.85x  (3.5x unmodified;  3.5 * 2.04/1.87 = 3.82x)
-#   1.87 + 1.87 + 2.04 -> 7.15x  (6.5x unmodified; 6.5 * 2.04/1.87 = 7.09x)
+#   1.87 + 2.02        -> 3.81x (3.5x unmodified; 3.5 * 2.02/1.87 = 3.78x)
+#   1.87 + 2.04        -> 3.85x (3.5x unmodified; 3.5 * 2.04/1.87 = 3.82x)
+#   1.87 + 2.55        -> 4.90x (3.5x unmodified; 3.5 * 2.55/1.87 = 4.77x)
+#   1.87 + 1.87 + 2.04 -> 7.15x (6.5x unmodified; 6.5 * 2.04/1.87 = 7.09x)
+#   1.87 + 1.87 + 2.55 -> 9.10x (6.5x unmodified; 6.5 * 2.55/1.87 = 8.86x)
 # The prices fit an affine map instead -- every price carries a fixed offset
 # that does not scale with the modifier:
 #   price = SHIFT + (BASE - SHIFT) * mult      (BASE = 1.87, SHIFT = 0.17)
 #   mult  = (price - SHIFT) / (BASE - SHIFT)
-# giving 1.87x -> 1.000x, 2.02x -> 1.088x, 2.04x -> 1.100x, which reproduces
-# all three observed payouts exactly (3.5 * 1.088 = 3.81, 3.5 * 1.1 = 3.85,
-# 6.5 * 1.1 = 7.15). Offsets in [0.157, 0.183] fit the same data; 0.17 is the
-# value that lands the observed prices on round modifiers (2.04x = 1.10x).
+# giving 1.87x -> 1.000x, 2.02x -> 1.088x, 2.04x -> 1.100x, 2.55x -> 1.400x,
+# which reproduces every observed payout exactly (3.5 * 1.088 = 3.81,
+# 3.5 * 1.1 = 3.85, 3.5 * 1.4 = 4.90, 6.5 * 1.1 = 7.15, 6.5 * 1.4 = 9.10).
+# The 2.55x observations pin the slope at 1/1.70 from far outside the cluster
+# near 1.87x; the 2.02x/2.04x pair pins the offset. Offsets in [0.167, 0.172]
+# fit every point, and 0.17 is the value that lands observed prices on round
+# modifiers (2.04x = 1.10x, 2.55x = 1.40x).
+#
+# Note that Underdog rounds the displayed price to two decimals, so a price
+# read off a slip converts to within ~0.3% of the true modifier -- e.g. a leg
+# shown as 2.02x is anywhere in 2.015-2.025x, worth 1.085-1.091x.
 UNDERDOG_BASE_PRICE = 1.87   # displayed price of an unmodified (1.0x) leg
 UNDERDOG_PRICE_SHIFT = 0.17  # fixed portion of a leg price that does not scale
 
@@ -788,8 +797,11 @@ if not use_std_leg_mults:
         with st.sidebar.expander("Leg price scale"):
             st.caption(
                 "Leg price = offset + (unmodified price − offset) × modifier. "
-                "Defaults reproduce Underdog's published payouts: 2.02x → 1.088x, "
-                "2.04x → 1.100x, so 1.87x + 2.04x pays 3.5 × 1.1 = 3.85x."
+                "Defaults reproduce Underdog's payouts: 2.02x → 1.088x, "
+                "2.04x → 1.100x, 2.55x → 1.400x — so 1.87x + 2.04x pays "
+                "3.5 × 1.1 = 3.85x and 1.87x + 2.55x pays 3.5 × 1.4 = 4.90x. "
+                "Prices are only shown to 2 decimals, so a converted modifier "
+                "can be off by up to ~0.3%."
             )
             _ud_base = st.number_input(
                 "Unmodified leg price", key="ud_base_price", step=0.01, format="%.2f"
