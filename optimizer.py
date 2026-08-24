@@ -22,17 +22,26 @@ def american_to_prob(value):
 # Underdog Fantasy instead displays the *price* of each leg, where an
 # unmodified leg prices at 1.87x. Those prices are NOT proportional to the
 # 1.0x scale -- dividing by 1.87 undershoots every observed slip:
-#   1.87 + 2.02  ->  3.81x  (3.5x unmodified;  3.5 * 2.02/1.87 = 3.78x)
-#   1.87 + 2.04  ->  3.85x  (3.5x unmodified;  3.5 * 2.04/1.87 = 3.82x)
-#   1.87 + 1.87 + 2.04 -> 7.15x  (6.5x unmodified; 6.5 * 2.04/1.87 = 7.09x)
+#   1.87 + 2.02        -> 3.81x (3.5x unmodified; 3.5 * 2.02/1.87 = 3.78x)
+#   1.87 + 2.04        -> 3.85x (3.5x unmodified; 3.5 * 2.04/1.87 = 3.82x)
+#   1.87 + 2.55        -> 4.90x (3.5x unmodified; 3.5 * 2.55/1.87 = 4.77x)
+#   1.87 + 1.87 + 2.04 -> 7.15x (6.5x unmodified; 6.5 * 2.04/1.87 = 7.09x)
+#   1.87 + 1.87 + 2.55 -> 9.10x (6.5x unmodified; 6.5 * 2.55/1.87 = 8.86x)
 # The prices fit an affine map instead -- every price carries a fixed offset
 # that does not scale with the modifier:
 #   price = SHIFT + (BASE - SHIFT) * mult      (BASE = 1.87, SHIFT = 0.17)
 #   mult  = (price - SHIFT) / (BASE - SHIFT)
-# giving 1.87x -> 1.000x, 2.02x -> 1.088x, 2.04x -> 1.100x, which reproduces
-# all three observed payouts exactly (3.5 * 1.088 = 3.81, 3.5 * 1.1 = 3.85,
-# 6.5 * 1.1 = 7.15). Offsets in [0.157, 0.183] fit the same data; 0.17 is the
-# value that lands the observed prices on round modifiers (2.04x = 1.10x).
+# giving 1.87x -> 1.000x, 2.02x -> 1.088x, 2.04x -> 1.100x, 2.55x -> 1.400x,
+# which reproduces every observed payout exactly (3.5 * 1.088 = 3.81,
+# 3.5 * 1.1 = 3.85, 3.5 * 1.4 = 4.90, 6.5 * 1.1 = 7.15, 6.5 * 1.4 = 9.10).
+# The 2.55x observations pin the slope at 1/1.70 from far outside the cluster
+# near 1.87x; the 2.02x/2.04x pair pins the offset. Offsets in [0.167, 0.172]
+# fit every point, and 0.17 is the value that lands observed prices on round
+# modifiers (2.04x = 1.10x, 2.55x = 1.40x).
+#
+# Note that Underdog rounds the displayed price to two decimals, so a price
+# read off a slip converts to within ~0.3% of the true modifier -- e.g. a leg
+# shown as 2.02x is anywhere in 2.015-2.025x, worth 1.085-1.091x.
 UNDERDOG_BASE_PRICE = 1.87   # displayed price of an unmodified (1.0x) leg
 UNDERDOG_PRICE_SHIFT = 0.17  # fixed portion of a leg price that does not scale
 
@@ -599,9 +608,6 @@ _SS_DEFAULTS = {
     "sweat_free_enabled": False,
     "boost_on_gross": True,
     "use_std_leg_mults": True,
-    "leg_mult_format": "standard",
-    "ud_base_price": UNDERDOG_BASE_PRICE,
-    "ud_price_shift": UNDERDOG_PRICE_SHIFT,
     "use_tiered_stakes": False,
     "max_stake_small": 0.0,
     "max_stake_large": 0.0,
@@ -612,6 +618,82 @@ _SS_DEFAULTS = {
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+
+# --- CANONICAL WIDGET STATE ---
+# Streamlit discards the session_state entry of any widget it does not render
+# on a given run -- a hidden section, a preset that swaps the inputs out, or
+# (on some versions) an ordinary rerun. A widget key therefore cannot be the
+# store for anything that lives behind a toggle: the input snaps back to its
+# default the next time it appears. Canonical values live under "_cv_" keys,
+# which are never widget keys and so are never discarded. Widgets are seeded
+# from them before rendering and write back to them afterwards.
+
+def _cv_get(name, default):
+    """Read the canonical value for a widget, seeding it on first use."""
+    ckey = f"_cv_{name}"
+    if ckey not in st.session_state:
+        st.session_state[ckey] = default
+    return st.session_state[ckey]
+
+
+def _cv_key(name):
+    """Current widget key for a canonical name (see _cv_reset for the suffix)."""
+    gen = st.session_state.get(f"_cvgen_{name}", 0)
+    return name if gen == 0 else f"{name}__g{gen}"
+
+
+def _cv_reset(name, default):
+    """Force a value back to its default.
+
+    A value already registered against a live widget cannot be overwritten in
+    place -- Streamlit keeps (or clamps) the registered one. Bumping the
+    generation gives the widget a fresh key, so it is built from scratch.
+    """
+    st.session_state[f"_cvgen_{name}"] = st.session_state.get(f"_cvgen_{name}", 0) + 1
+    st.session_state[f"_cv_{name}"] = default
+    st.session_state[_cv_key(name)] = default
+    return default
+
+
+def _cv_set(name, value):
+    """Set the canonical value and the widget key together (before rendering)."""
+    st.session_state[f"_cv_{name}"] = value
+    st.session_state[_cv_key(name)] = value
+    return value
+
+
+def _cv_number_input(container, label, name, default, minimum=None, **kwargs):
+    """number_input whose value survives runs where the widget isn't rendered."""
+    wkey = _cv_key(name)
+    if wkey not in st.session_state:
+        st.session_state[wkey] = _cv_get(name, default)
+    # Repair anything unusable (a stale 0.0 left by an earlier build, a value
+    # under the floor) before it reaches the widget.
+    cur = st.session_state[wkey]
+    if not isinstance(cur, (int, float)) or isinstance(cur, bool) or \
+            (minimum is not None and cur < minimum):
+        _cv_reset(name, default)
+        wkey = _cv_key(name)
+    if minimum is not None:
+        kwargs["min_value"] = minimum
+    val = float(container.number_input(label, key=wkey, **kwargs))
+    st.session_state[f"_cv_{name}"] = val
+    return val
+
+
+def _cv_selectbox(container, label, name, options, default, **kwargs):
+    """selectbox whose value survives runs where the widget isn't rendered."""
+    wkey = _cv_key(name)
+    if wkey not in st.session_state:
+        st.session_state[wkey] = _cv_get(name, default)
+    if st.session_state[wkey] not in options:
+        _cv_reset(name, default)
+        wkey = _cv_key(name)
+    val = container.selectbox(label, options=options, key=wkey, **kwargs)
+    st.session_state[f"_cv_{name}"] = val
+    return val
+
 
 # --- STREAMLIT LAYOUT ---
 st.set_page_config(page_title="Pick6/DFS Optimizer", layout="wide")
@@ -633,7 +715,7 @@ if selected_preset != _prev_preset:
         st.session_state["sweat_free_enabled"] = False
         st.session_state["boost_on_gross"] = True
         st.session_state["use_std_leg_mults"] = True
-        st.session_state["leg_mult_format"] = _PRESET_LEG_MULT_FORMATS.get(selected_preset, "standard")
+        _cv_set("leg_mult_format", _PRESET_LEG_MULT_FORMATS.get(selected_preset, "standard"))
         st.session_state["use_tiered_stakes"] = False
         st.session_state["max_stake_small"] = 0.0
         st.session_state["max_stake_large"] = 0.0
@@ -754,10 +836,13 @@ boost_on_gross = st.sidebar.checkbox(
 )
 
 st.sidebar.markdown("---")
-_leg_format = st.session_state.get("leg_mult_format", "standard")
+_leg_format = _cv_get("leg_mult_format", "standard")
+_ud_base = _cv_get("ud_base_price", UNDERDOG_BASE_PRICE)
+_ud_shift = _cv_get("ud_price_shift", UNDERDOG_PRICE_SHIFT)
+if not (isinstance(_ud_base, (int, float)) and isinstance(_ud_shift, (int, float))
+        and _ud_base - _ud_shift > 0):
+    _ud_base, _ud_shift = UNDERDOG_BASE_PRICE, UNDERDOG_PRICE_SHIFT
 _ud_format = _leg_format == "underdog"
-_ud_base = float(st.session_state.get("ud_base_price", UNDERDOG_BASE_PRICE))
-_ud_shift = float(st.session_state.get("ud_price_shift", UNDERDOG_PRICE_SHIFT))
 
 use_std_leg_mults = st.sidebar.checkbox(
     f"All legs at standard price ({_ud_base:.2f}x)?" if _ud_format else "All leg multipliers 1.0x?",
@@ -773,46 +858,59 @@ leg_mults = [1.0] * 8
 leg_inputs = [_ud_base if _ud_format else 1.0] * 8
 
 if not use_std_leg_mults:
-    st.sidebar.selectbox(
-        "Leg multiplier format",
-        options=["standard", "underdog"],
-        key="leg_mult_format",
+    _leg_format = _cv_selectbox(
+        st.sidebar, "Leg multiplier format", "leg_mult_format",
+        ["standard", "underdog"], "standard",
         format_func=lambda v: "Standard (1.0x = unmodified)" if v == "standard"
                               else f"Underdog leg price ({_ud_base:.2f}x = unmodified)",
         help="Underdog Fantasy shows each leg's price instead of a 1.0x-scale modifier. "
              "Picking that format lets you type the prices straight off the slip."
     )
-    _ud_format = st.session_state["leg_mult_format"] == "underdog"
+    _ud_format = _leg_format == "underdog"
 
     if _ud_format:
         with st.sidebar.expander("Leg price scale"):
             st.caption(
                 "Leg price = offset + (unmodified price − offset) × modifier. "
-                "Defaults reproduce Underdog's published payouts: 2.02x → 1.088x, "
-                "2.04x → 1.100x, so 1.87x + 2.04x pays 3.5 × 1.1 = 3.85x."
+                "Defaults reproduce Underdog's payouts: 2.02x → 1.088x, "
+                "2.04x → 1.100x, 2.55x → 1.400x — so 1.87x + 2.04x pays "
+                "3.5 × 1.1 = 3.85x and 1.87x + 2.55x pays 3.5 × 1.4 = 4.90x. "
+                "Prices are only shown to 2 decimals, so a converted modifier "
+                "can be off by up to ~0.3%."
             )
-            _ud_base = st.number_input(
-                "Unmodified leg price", key="ud_base_price", step=0.01, format="%.2f"
+            # Rendered before the inputs so a reset takes effect on this run:
+            # _cv_reset re-keys the widgets, so they are built fresh below.
+            if st.button("Reset to defaults", key="ud_scale_reset"):
+                _cv_reset("ud_base_price", UNDERDOG_BASE_PRICE)
+                _cv_reset("ud_price_shift", UNDERDOG_PRICE_SHIFT)
+            _ud_base = _cv_number_input(
+                st, "Unmodified leg price", "ud_base_price", UNDERDOG_BASE_PRICE,
+                minimum=0.01, step=0.01, format="%.2f"
             )
-            _ud_shift = st.number_input(
-                "Price offset", key="ud_price_shift", step=0.01, format="%.2f"
+            _ud_shift = _cv_number_input(
+                st, "Price offset", "ud_price_shift", UNDERDOG_PRICE_SHIFT,
+                step=0.01, format="%.2f"
             )
             if _ud_base - _ud_shift <= 0:
-                st.warning("Unmodified price must exceed the offset; using defaults.")
+                st.warning(
+                    f"Unmodified price must exceed the offset — using "
+                    f"{UNDERDOG_BASE_PRICE:.2f} / {UNDERDOG_PRICE_SHIFT:.2f} until it does."
+                )
                 _ud_base, _ud_shift = UNDERDOG_BASE_PRICE, UNDERDOG_PRICE_SHIFT
 
     st.sidebar.subheader("Individual Leg Prices" if _ud_format else "Individual Leg Multipliers")
     lm_cols = st.sidebar.columns(3)
     for i in range(_n_leg_inputs):
         if _ud_format:
-            leg_inputs[i] = lm_cols[i % 3].number_input(
-                f"Leg {i+1} price", value=float(_ud_base), step=0.01, format="%.2f",
-                key=f"ud_leg_price_{i}"
+            leg_inputs[i] = _cv_number_input(
+                lm_cols[i % 3], f"Leg {i+1} price", f"ud_leg_price_{i}", float(_ud_base),
+                minimum=0.0, step=0.01, format="%.2f"
             )
             leg_mults[i] = underdog_price_to_leg_mult(leg_inputs[i], _ud_base, _ud_shift)
         else:
-            leg_mults[i] = lm_cols[i % 3].number_input(
-                f"Leg {i+1} x", value=1.0, step=0.01, format="%.2f", key=f"leg_mult_{i}"
+            leg_mults[i] = _cv_number_input(
+                lm_cols[i % 3], f"Leg {i+1} x", f"leg_mult_{i}", 1.0,
+                minimum=0.0, step=0.01, format="%.2f"
             )
             leg_inputs[i] = leg_mults[i]
 
