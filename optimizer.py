@@ -534,6 +534,15 @@ PRESETS = {
         "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 50.0, "p8_i": 5.0, "p8_i2": 2.5,
     },
+    "Drafters (Power Only)": {
+        "p2": 3.0,
+        "p3": 6.0,
+        "p4": 10.0, "p4_i": 0.0,
+        "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
+        "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 100.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
     "Underdog Fantasy": {
         "p2": 3.5,
         "p3": 6.5,
@@ -557,6 +566,7 @@ _PRESET_MAX_STAKES = {
     "Betr Picks": 10.0,
     "Prizepicks": 5.0,
     "Drafters": 10.0,
+    "Drafters (Power Only)": 10.0,
     "Underdog Fantasy": 25.0,
 }
 
