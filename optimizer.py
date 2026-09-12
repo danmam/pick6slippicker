@@ -460,6 +460,30 @@ PRESETS = {
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
         "f2": 2.7, "f3": 5.0, "f4": 8.0, "f5": 12.0, "f6": 25.0,
     },
+    "DK Pick6 CFB": {
+        "p2": 3.32,
+        "p3": 7.10,
+        "p4": 11.93, "p4_i": 0.0,
+        "p5": 19.33, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 35.28, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 89.00, "p7_i": 2.0, "p7_i2": 0.0,
+        "p8": 159.20, "p8_i": 3.0, "p8_i2": 1.0,
+        # 2-6 pick floors from the 8/26/26 sheet; 7/8 floors and intermediates
+        # assumed to match the NBA/MLB/NFL 40x/80x structure -- verify in app.
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
+    },
+    "DK Pick6 CFB Promo": {
+        # Derived: p_N = min(avg_N, (avg_{N-1}/floor_{N-1}) * floor_N), 2-pick = floor.
+        # (Formula reproduces the hand-entered NBA Promo preset exactly.)
+        "p2": 3.0,
+        "p3": 6.64,
+        "p4": 11.83, "p4_i": 0.0,
+        "p5": 14.32, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 35.28, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 56.45, "p7_i": 2.0, "p7_i2": 0.0,
+        "p8": 159.20, "p8_i": 3.0, "p8_i2": 1.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
+    },
     "DK Pick6 WNBA": {
         "p2": 3.1,
         "p3": 5.55,
