@@ -295,14 +295,14 @@ PRESETS = {
     "Custom": None,
     "Betr Nukes": {
         "p2": 6.0,
-        "p3": 10.0,
+        "p3": 10.0, "p3_i": 0.0,
         "p4": 20.0, "p4_i": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "Betr Picks": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 6.0, "p4_i": 1.5,
         "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
         "p6": 20.0, "p6_i": 1.5, "p6_i2": 1.0,
@@ -311,7 +311,7 @@ PRESETS = {
     },
     "Dabble": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 0.0, "p6_i": 0.0, "p6_i2": 0.0,
@@ -320,7 +320,7 @@ PRESETS = {
     },
     "DK Pick6 NBA": {
         "p2": 3.08,
-        "p3": 6.175,
+        "p3": 6.175, "p3_i": 0.0,
         "p4": 10.94, "p4_i": 0.0,
         "p5": 14.82, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 31.08, "p6_i": 1.5, "p6_i2": 0.0,
@@ -329,7 +329,7 @@ PRESETS = {
     },
     "DK Pick6 NBA Promo": {
         "p2": 3.0,
-        "p3": 6.16,
+        "p3": 6.16, "p3_i": 0.0,
         "p4": 10.29, "p4_i": 0.0,
         "p5": 13.13, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 30.88, "p6_i": 1.5, "p6_i2": 0.0,
@@ -338,7 +338,7 @@ PRESETS = {
     },
     "DK Pick6 CBB": {
         "p2": 3.22,
-        "p3": 5.51,
+        "p3": 5.51, "p3_i": 0.0,
         "p4": 11.83, "p4_i": 0.0,
         "p5": 21.01, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
@@ -347,7 +347,7 @@ PRESETS = {
     },
     "DK Pick6 CBB Promo": {
         "p2": 2.7,
-        "p3": 5.51,
+        "p3": 5.51, "p3_i": 0.0,
         "p4": 8.81, "p4_i": 0.0,
         "p5": 17.74, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
@@ -356,7 +356,7 @@ PRESETS = {
     },
     "DK Pick6 WNBA": {
         "p2": 3.1,
-        "p3": 5.55,
+        "p3": 5.55, "p3_i": 0.0,
         "p4": 10.05, "p4_i": 0.0,
         "p5": 13.55, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.75, "p6_i": 1.5, "p6_i2": 0.0,
@@ -365,7 +365,7 @@ PRESETS = {
     },
     "DK Pick6 WNBA Promo": {
         "p2": 3,
-        "p3": 5.55,
+        "p3": 5.55, "p3_i": 0.0,
         "p4": 10.05, "p4_i": 0.0,
         "p5": 12.06, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.75, "p6_i": 1.5, "p6_i2": 0.0,
@@ -374,7 +374,7 @@ PRESETS = {
     },
     "DK Pick6 UFC": {
         "p2": 3.98,
-        "p3": 8.48,
+        "p3": 8.48, "p3_i": 0.0,
         "p4": 15.9, "p4_i": 0.0,
         "p5": 21.62, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 63.68, "p6_i": 1.5, "p6_i2": 0.0,
@@ -383,7 +383,7 @@ PRESETS = {
     },
     "DK Pick6 NHL": {
         "p2": 3.82,
-        "p3": 7.06,
+        "p3": 7.06, "p3_i": 0.0,
         "p4": 12.74, "p4_i": 0.0,
         "p5": 16.54, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
@@ -392,7 +392,7 @@ PRESETS = {
     },
     "DK Pick6 NHL Promo": {
         "p2": 3,
-        "p3": 7.06,
+        "p3": 7.06, "p3_i": 0.0,
         "p4": 11.77, "p4_i": 0.0,
         "p5": 15.29, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
@@ -401,7 +401,7 @@ PRESETS = {
     },
     "DK Pick6 PGA": {
         "p2": 3.46,
-        "p3": 6.38,
+        "p3": 6.38, "p3_i": 0.0,
         "p4": 12.42, "p4_i": 0.0,
         "p5": 15.3, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 24.26, "p6_i": 1.5, "p6_i2": 0.0,
@@ -410,7 +410,7 @@ PRESETS = {
     },
     "DK Pick6 MLB": {
         "p2": 3.4,
-        "p3": 6.64,
+        "p3": 6.64, "p3_i": 0.0,
         "p4": 10.64, "p4_i": 0.0,
         "p5": 15.56, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.78, "p6_i": 1.5, "p6_i2": 0.0,
@@ -419,7 +419,7 @@ PRESETS = {
     },
     "DK Pick6 MLB Promo": {
         "p2": 3.0,
-        "p3": 6.64,
+        "p3": 6.64, "p3_i": 0.0,
         "p4": 10.64, "p4_i": 0.0,
         "p5": 12.77, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.78, "p6_i": 1.5, "p6_i2": 0.0,
@@ -428,7 +428,7 @@ PRESETS = {
     },
     "DK Pick6 Soccer": {
         "p2": 3.6,
-        "p3": 6.66,
+        "p3": 6.66, "p3_i": 0.0,
         "p4": 12.56, "p4_i": 0.0,
         "p5": 19.4, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 31.2, "p6_i": 1.5, "p6_i2": 0.0,
@@ -437,7 +437,7 @@ PRESETS = {
     },
     "DK Pick6 Soccer Promo": {
         "p2": 3,
-        "p3": 6.6,
+        "p3": 6.6, "p3_i": 0.0,
         "p4": 12.11, "p4_i": 0.0,
         "p5": 15.07, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 31.2, "p6_i": 1.5, "p6_i2": 0.0,
@@ -446,7 +446,7 @@ PRESETS = {
     },
     "DK Pick6 CS2": {
         "p2": 3.1,
-        "p3": 5.27,
+        "p3": 5.27, "p3_i": 0.0,
         "p4": 8.16, "p4_i": 0.0,
         "p5": 14.94, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 20.29, "p6_i": 1.5, "p6_i2": 0.0,
@@ -455,7 +455,7 @@ PRESETS = {
     },
     "DK Pick6 CS2 Promo": {
         "p2": 2.5,
-        "p3": 4.94,
+        "p3": 4.94, "p3_i": 0.0,
         "p4": 7.90, "p4_i": 0.0,
         "p5": 0.00, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 0.00, "p6_i": 0.0, "p6_i2": 0.0,
@@ -464,7 +464,7 @@ PRESETS = {
     },
     "DK Pick6 Valorant": {
         "p2": 3.51,
-        "p3": 8.98,
+        "p3": 8.98, "p3_i": 0.0,
         "p4": 10.47, "p4_i": 0.0,
         "p5": 0, "p5_i": 0, "p5_i2": 0.0,
         "p6": 0, "p6_i": 0, "p6_i2": 0.0,
@@ -473,7 +473,7 @@ PRESETS = {
     },
     "DK Pick6 COD": {
         "p2": 3.31,
-        "p3": 6.14,
+        "p3": 6.14, "p3_i": 0.0,
         "p4": 9.09, "p4_i": 0.0,
         "p5": 0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 0, "p6_i": 0, "p6_i2": 0.0,
@@ -482,7 +482,7 @@ PRESETS = {
     },
     "DK Pick6 LOL": {
         "p2": 3.77,
-        "p3": 6.91,
+        "p3": 6.91, "p3_i": 0.0,
         "p4": 10.94, "p4_i": 0.0,
         "p5": 15.9, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 20.32, "p6_i": 1.5, "p6_i2": 0.0,
@@ -491,7 +491,7 @@ PRESETS = {
     },
     "DK Pick6 NFL": {
         "p2": 3.38,
-        "p3": 6.64,
+        "p3": 6.64, "p3_i": 0.0,
         "p4": 11.74, "p4_i": 0.0,
         "p5": 18.26, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 35.72, "p6_i": 1.5, "p6_i2": 0.0,
@@ -500,7 +500,7 @@ PRESETS = {
     },
     "Prizepicks": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 6.0, "p4_i": 1.5,
         "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
         "p6": 25.0, "p6_i": 2.0, "p6_i2": 0.4,
@@ -509,7 +509,7 @@ PRESETS = {
     },
     "RTSports (Mulligan)": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 12.0, "p5_i": 2.0, "p5_i2": 0.0,
         "p6": 25.0, "p6_i": 2.5, "p6_i2": 0.0,
@@ -518,7 +518,7 @@ PRESETS = {
     },
     "RTSports (Power)": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 12.0, "p5_i": 2.0, "p5_i2": 0.0,
         "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0,
@@ -527,7 +527,7 @@ PRESETS = {
     },
     "Drafters": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 4.0, "p4_i": 2.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 10.0, "p6_i": 2.5, "p6_i2": 1.5,
@@ -536,19 +536,29 @@ PRESETS = {
     },
     "Drafters (Power Only)": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0,
         "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 100.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
+    # Underdog offers a Power (all-or-nothing) and a Flex (partial-win) ladder
+    # at each slip size. This preset takes whichever needs the lower breakeven
+    # win rate per leg, assuming equal legs:
+    #   2 legs  Power 3.5x           53.45%   (no Flex ladder offered)
+    #   3 legs  Power 6.5x           53.58%   vs Flex 3.25/1.09     55.39%
+    #   4 legs  Flex 7.2/1.4         53.70%   vs Power 12x          53.73%
+    #   5 legs  Flex 10/2.5          54.75%   vs Power 20x          54.93%
+    #   6 legs  Flex 25/2.6/0.25     53.82%   vs Power 35x          55.29%
+    # Note the 4 and 5-leg margins are thin and reverse on EV once the legs
+    # clear ~53.9% / ~55.6%, where the Power ladder pays more.
     "Underdog Fantasy": {
         "p2": 3.5,
-        "p3": 6.5,
-        "p4": 7.2, "p4_i": 1.8,
-        "p5": 0.0, "p5_i": 0.0, "p5_i2": 0.0,
-        "p6": 0.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p3": 6.5, "p3_i": 0.0,
+        "p4": 7.2, "p4_i": 1.4,
+        "p5": 10.0, "p5_i": 2.5, "p5_i2": 0.0,
+        "p6": 25.0, "p6_i": 2.6, "p6_i2": 0.25,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
@@ -936,7 +946,12 @@ st.header("1. Payout Structure (Base Multipliers)")
 # Row 1: 2, 3, 4 picks
 c1, c2, c3 = st.columns(3)
 p2 = c1.number_input("2-Pick Win", value=st.session_state.get("p2", 3.0), key="p2")
-p3 = c2.number_input("3-Pick Win", value=st.session_state.get("p3", 6.0), key="p3")
+
+with c2:
+    st.markdown("**3-Pick**")
+    col_a, col_b = st.columns(2)
+    p3 = col_a.number_input("3/3", value=st.session_state.get("p3", 6.0), key="p3")
+    p3_i = col_b.number_input("2/3", value=st.session_state.get("p3_i", 0.0), key="p3_i")
 
 with c3:
     st.markdown("**4-Pick**")
@@ -1033,10 +1048,17 @@ if st.button("Calculate EV & Stakes", type="primary"):
     # Define the payout structures for each slip size based on inputs
     # Format: {num_wins: multiplier}
     s = payout_scale
+    # A tier keyed at 0.0 counts as a win that pays nothing, which is not the
+    # same as a complete loss under "Refund on Loss" -- so only include the
+    # partial tier when it pays.
+    _p3_struct = {3: p3 * s}
+    if p3_i > 0:
+        _p3_struct[2] = p3_i * s
+
     slip_configs = [
         # (N, payout_dict)
         (2, {2: p2 * s}),
-        (3, {3: p3 * s}),
+        (3, _p3_struct),
         (4, {4: p4 * s, 3: p4_i * s}),
         (5, {5: p5 * s, 4: p5_i * s, 3: p5_i2 * s}),
         (6, {6: p6 * s, 5: p6_i * s, 4: p6_i2 * s}),
