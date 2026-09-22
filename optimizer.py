@@ -1205,24 +1205,21 @@ if st.button("Calculate EV & Stakes", type="primary"):
     # Define the payout structures for each slip size based on inputs
     # Format: {num_wins: multiplier}
     s = payout_scale
-    # A tier keyed at 0.0 counts as a win that pays nothing, which is not the
-    # same as a complete loss under "Refund on Loss" -- so only include the
-    # partial tier when it pays.
-    _p3_struct = {3: p3 * s}
-    if p3_i > 0:
-        _p3_struct[2] = p3_i * s
-
+    # scaled_tiers drops any tier that does not pay. A tier keyed at 0.0 counts
+    # as a win paying nothing, which is not the same as a complete loss: under
+    # "Refund on Loss" with partial refunds off, the zero-keyed tier forfeits
+    # the refund a loss would collect. Unused tiers must be absent, not zero.
     slip_configs = [
         # (N, payout_dict)
-        (2, {2: p2 * s}),
-        (3, _p3_struct),
-        (4, {4: p4 * s, 3: p4_i * s}),
-        (5, {5: p5 * s, 4: p5_i * s, 3: p5_i2 * s}),
-        (6, {6: p6 * s, 5: p6_i * s, 4: p6_i2 * s}),
+        (2, scaled_tiers({2: p2}, s)),
+        (3, scaled_tiers({3: p3, 2: p3_i}, s)),
+        (4, scaled_tiers({4: p4, 3: p4_i}, s)),
+        (5, scaled_tiers({5: p5, 4: p5_i, 3: p5_i2}, s)),
+        (6, scaled_tiers({6: p6, 5: p6_i, 4: p6_i2}, s)),
     ]
     if show_78:
-        slip_configs.append((7, {7: p7 * s, 6: p7_i * s, 5: p7_i2 * s}))
-        slip_configs.append((8, {8: p8 * s, 7: p8_i * s, 6: p8_i2 * s}))
+        slip_configs.append((7, scaled_tiers({7: p7, 6: p7_i, 5: p7_i2}, s)))
+        slip_configs.append((8, scaled_tiers({8: p8, 7: p8_i, 6: p8_i2}, s)))
 
     # Every ladder for a given slip size is priced under the same circumstances.
     cfg = {
