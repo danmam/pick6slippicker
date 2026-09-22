@@ -112,39 +112,161 @@ def calculate_expected_growth(outcomes, stake_fraction):
         growth_sum += prob * math.log(term)
     return growth_sum * 10000
 
-def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_boost, max_boost_amount=0.0, stake=1.0, boost_on_gross=True, sweat_free_fraction=0.0, stake_back_on_win=False, refund_partial_wins=True):
+# --- DK PICK6 PARIMUTUEL MODEL ---
+# DK Pick6 pays a guaranteed floor per tier plus a parimutuel "extra winnings"
+# overage that depends on how the rest of the pool did. The preset top-tier
+# values are 30-day AVERAGE payouts (floor + average overage baked together);
+# intermediate tiers only have published floors. The model decomposes:
+#
+#   overage(top) = max(0, avg(top) - floor(top))
+#   payout(tier) = floor*legmults + boost_cash(on the floor part ONLY) + overage
+#
+# Boosts multiply the guaranteed component only -- the overage is never
+# boosted. The all-correct overage is scaled by a "chalk factor": winning with
+# picks the pool also holds means sharing the pool with more winners, so
+# chalkier-than-typical slips get less overage and contrarian slips more.
+#
+# Lower tiers have no published averages. Their overage is estimated by
+# apportioning the top-tier overage by per-winner parimutuel intensity:
+# share_k / w_k, where share_k is the assumed tier split of the prize pool and
+# w_k = C(N,k) * p^k * (1-p)^(N-k) is the fraction of a pool of typical
+# (p ~ 50% per leg) entries finishing in tier k. Fewer expected winners and a
+# bigger pool share both mean more overage per winner. The tier splits below
+# follow DK's published 80/20 (two paying tiers) and 70/20/10 (three paying
+# tiers) structure and are an editable assumption.
+_TIER_SHARE_SPLITS = {1: [1.0], 2: [0.8, 0.2], 3: [0.7, 0.2, 0.1]}
+POOL_LEG_PROB = 0.5      # assumed pool-typical per-leg win rate (DK curates ~coinflips)
+CHALK_FACTOR_MIN = 0.25  # clamp on the chalk adjustment
+CHALK_FACTOR_MAX = 4.0
+
+
+def chalk_overage_factor(probs, leg_multipliers=None, beta=1.0,
+                         lo=CHALK_FACTOR_MIN, hi=CHALK_FACTOR_MAX):
+    """
+    Chalk adjustment for the all-correct overage: (q0/q)**beta, clamped.
+
+    q  = product of the true leg win probabilities (your inputs).
+    q0 = product of DK's implied reference prob per leg: 0.5 for a standard
+         1.0x leg, ~0.5/mult for multiplier legs (capped at 1.0), so a properly
+         priced multiplier pick is chalk-neutral and difficulty isn't counted
+         twice (the leg multiplier already scales the payout).
+
+    q > q0 (chalkier than the typical pool slip) shrinks the overage;
+    q < q0 (contrarian) inflates it. beta=0 disables the adjustment.
+    Returns 1.0 when any leg prob is unusable.
+    """
+    if beta == 0:
+        return 1.0
+    mults = leg_multipliers if leg_multipliers is not None else [1.0] * len(probs)
+    q = 1.0
+    q0 = 1.0
+    for p, m in zip(probs, mults):
+        if p <= 0.0 or p >= 1.0:
+            return 1.0
+        q *= p
+        ref = 0.5 / m if m > 0 else 0.5
+        q0 *= min(1.0, ref)
+    if q <= 0:
+        return 1.0
+    factor = (q0 / q) ** beta
+    return max(lo, min(hi, factor))
+
+
+def build_tier_components(payout_structure, floor_structure, n_legs,
+                          estimate_lower_tier_overage=True,
+                          pool_leg_prob=POOL_LEG_PROB):
+    """
+    Decompose per-tier payouts into (floor_mult, overage_mult).
+
+    Args:
+        payout_structure: {wins: avg payout mult}. Top tier = 30-day average;
+                          intermediate tiers = guaranteed floors (no avg data).
+        floor_structure:  {wins: guaranteed floor mult}. For fixed-payout sites
+                          floor == payout, giving zero overage everywhere.
+        n_legs: slip size.
+        estimate_lower_tier_overage: apportion the top-tier overage to lower
+                          tiers by parimutuel intensity (see module docstring).
+                          False = lower tiers pay floors only (conservative).
+
+    Returns:
+        {wins: (floor_mult, overage_mult)} for paying tiers.
+    """
+    paying = sorted(
+        {k for k, v in payout_structure.items() if v > 0} |
+        {k for k, v in floor_structure.items() if v > 0},
+        reverse=True)
+    comps = {}
+    if not paying:
+        return comps
+
+    top = n_legs
+    top_avg = payout_structure.get(top, 0.0)
+    top_floor = floor_structure.get(top, 0.0)
+    if top_floor <= 0:
+        top_floor = top_avg
+    top_over = max(0.0, top_avg - top_floor)
+
+    splits = _TIER_SHARE_SPLITS.get(len(paying))
+    if splits is None:
+        splits = [1.0] + [0.0] * (len(paying) - 1)
+
+    def _w(k):
+        return math.comb(n_legs, k) * pool_leg_prob ** k * (1.0 - pool_leg_prob) ** (n_legs - k)
+
+    w_top = _w(top)
+    top_intensity = (splits[0] / w_top) if w_top > 0 else 0.0
+
+    for idx, k in enumerate(paying):
+        if k == top:
+            comps[k] = (top_floor, top_over)
+            continue
+        floor_k = floor_structure.get(k, payout_structure.get(k, 0.0))
+        over_k = 0.0
+        if estimate_lower_tier_overage and top_over > 0 and top_intensity > 0:
+            w_k = _w(k)
+            if w_k > 0:
+                over_k = top_over * (splits[idx] / w_k) / top_intensity
+        comps[k] = (floor_k, over_k)
+    return comps
+
+
+def calculate_complex_outcomes(probs, leg_multipliers, tier_components, global_boost,
+                               max_boost_amount=0.0, stake=1.0, boost_on_gross=True,
+                               sweat_free_fraction=0.0, stake_back_on_win=False,
+                               refund_partial_wins=True, chalk_factor=1.0):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
 
     Args:
         probs: List of win probabilities for each leg.
         leg_multipliers: List of payout multipliers for each leg (if it wins).
-        payout_structure: Dict mapping number of wins (k) to Base Payout Multiplier.
-                          e.g., {6: 25.0, 5: 2.0, 4: 0.4}
-        global_boost: Overall boost multiplier applied to the final payout.
+        tier_components: Dict mapping number of wins (k) to
+                         (floor_mult, overage_mult), from build_tier_components.
+        global_boost: Boost multiplier. Applies ONLY to the guaranteed floor
+                      component (after leg multipliers); the parimutuel overage
+                      is added on top unboosted.
         max_boost_amount: Maximum dollar amount the boost can add to payout (0 = unlimited).
         stake: The stake amount used to calculate the dollar cap on boost.
-        boost_on_gross: If True, boost multiplies the full payout. If False, boost
-                        multiplies only the net profit (payout - 1).
+        boost_on_gross: If True, boost multiplies the full guaranteed payout.
+                        If False, boost multiplies only its net-profit part
+                        (never negative on sub-1x tiers -- a profit boost
+                        cannot reduce a payout).
         sweat_free_fraction: Fraction of stake returned on a complete loss (outcome not in
-                             payout_structure). 0.0 = standard loss, 1.0 = full refund.
-                             Values between give a partial refund.
+                             tier_components). 0.0 = standard loss, 1.0 = full refund.
         stake_back_on_win: If True, sweat_free_fraction is also stacked on top of winning
-                           tiers whose payout already covers the stake (gross_payout >= 1.0),
-                           so a full win pays out its normal payout plus a full extra stake.
-        refund_partial_wins: For winning tiers that pay out less than the stake (e.g. a 0.4x
-                            payout, a net 0.7x loss), True (default) tops the payout up by
-                            sweat_free_fraction of the shortfall, so a full (1.0) refund makes
-                            the outcome breakeven. False leaves partial-win tiers untouched, so
-                            they can still lose part of the stake. Applies independently of
-                            stake_back_on_win, so partial win/loss tiers can be refunded even
-                            when only "Refund on Loss" behavior is otherwise wanted.
+                           tiers whose payout already covers the stake (gross_payout >= 1.0).
+        refund_partial_wins: For winning tiers that pay out less than the stake, True
+                            (default) tops the payout up by sweat_free_fraction of the
+                            shortfall. False leaves partial-win tiers untouched.
+        chalk_factor: Scales the overage of the all-correct tier only
+                      (see chalk_overage_factor).
 
     Returns:
         List of (probability, net_outcome) tuples.
     """
     num_legs = len(probs)
     outcomes = []
+    max_boost_per_dollar = (max_boost_amount / stake) if (max_boost_amount > 0 and stake > 0) else None
 
     # Iterate through all 2^N combinations (0=Loss, 1=Win)
     for scenario in itertools.product([0, 1], repeat=num_legs):
@@ -160,58 +282,44 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
             else:
                 scenario_prob *= (1 - probs[i])
 
-        # Check if this outcome is defined in the payout structure
-        if wins in payout_structure:
-            base_payout = payout_structure[wins]
+        if wins in tier_components:
+            floor_mult, overage_mult = tier_components[wins]
 
-            # Normal calculation for defined payouts
-            if base_payout > 0:
-                # Calculate unboosted payout (what it would be with global_boost = 1.0)
-                unboosted_payout = base_payout * scenario_leg_mult_product
-                # Calculate fully boosted payout
+            if floor_mult > 0 or overage_mult > 0:
+                # Guaranteed component: floor scaled by winning-leg multipliers.
+                base_gross = floor_mult * scenario_leg_mult_product
+                # Overage scales proportionally with the leg multipliers
+                # (harder picks earn more standings points -> larger pool share)
+                # and, on the all-correct tier, with the chalk factor.
+                overage = overage_mult * scenario_leg_mult_product
+                if wins == num_legs:
+                    overage *= chalk_factor
+
+                # Boost cash on the guaranteed component ONLY.
                 if boost_on_gross:
-                    boosted_payout = unboosted_payout * global_boost
+                    boost_cash = (global_boost - 1.0) * base_gross
                 else:
-                    # Boost applies only to net profit (payout minus returned stake)
-                    boosted_payout = 1.0 + (unboosted_payout - 1.0) * global_boost
+                    boost_cash = (global_boost - 1.0) * max(0.0, base_gross - 1.0)
+                if max_boost_per_dollar is not None and boost_cash > max_boost_per_dollar:
+                    boost_cash = max_boost_per_dollar
 
-                # Apply max boost cap if specified
-                if max_boost_amount > 0 and stake > 0:
-                    # The boost amount in multiplier terms (per $1 stake)
-                    boost_amount_per_dollar = boosted_payout - unboosted_payout
-                    # The max boost in multiplier terms (per $1 stake)
-                    max_boost_per_dollar = max_boost_amount / stake
-
-                    if boost_amount_per_dollar > max_boost_per_dollar:
-                        # Cap the boost
-                        gross_payout = unboosted_payout + max_boost_per_dollar
-                    else:
-                        gross_payout = boosted_payout
-                else:
-                    gross_payout = boosted_payout
+                gross_payout = base_gross + boost_cash + overage
             else:
                 # Explicit 0.0 payout in structure (rare but possible)
                 gross_payout = 0.0
 
             if gross_payout < 1.0:
                 # Partial win/loss: the payout alone is worth less than the stake.
-                # Refunding this is independent of stake_back_on_win, so it also
-                # applies under "Refund on Loss" when explicitly enabled.
                 if refund_partial_wins:
-                    # Make up the shortfall (scaled by sweat_free_fraction) so a
-                    # full refund (1.0) breaks even instead of leaving the loss
-                    # on a small payout untouched.
                     gross_payout += (1.0 - gross_payout) * sweat_free_fraction
             elif stake_back_on_win:
-                # Full win (payout already covers the stake): "Stake Back Win or
-                # Lose" stacks a full extra stake on top, as before.
+                # Full win (payout already covers the stake).
                 gross_payout += sweat_free_fraction
 
             net_outcome = gross_payout - 1.0
 
         else:
             # Outcome NOT defined in structure (typically a Loss)
-            # sweat_free_fraction: 0.0 = full loss, 1.0 = full refund, 0.5 = half stake back
             gross_payout = sweat_free_fraction
             net_outcome = sweat_free_fraction - 1.0
 
@@ -219,13 +327,15 @@ def calculate_complex_outcomes(probs, leg_multipliers, payout_structure, global_
 
     return outcomes
 
-def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gross, max_boost_amount, stake, leg_mult_product=1.0, sweat_free_fraction=0.0, stake_back_on_win=False, refund_partial_wins=True):
+def compute_payout_details(tier_components, n_legs, global_boost, boost_on_gross,
+                           max_boost_amount, stake, leg_mult_product=1.0,
+                           chalk_factor=1.0, sweat_free_fraction=0.0,
+                           stake_back_on_win=False, refund_partial_wins=True):
     """
     Compute payout details per win tier for display purposes.
-    Multiplier columns show preset values (no leg mult); prize/profit dollars
-    for the full-win tier are adjusted by leg_mult_product. Prize/profit dollars
-    also apply the stake-back/refund settings, mirroring calculate_complex_outcomes,
-    so a partial-win tier topped up to breakeven shows correctly here too.
+    Multiplier columns assume standard (1.0x) legs; prize/profit dollars for
+    the full-win tier are adjusted by leg_mult_product. Dollars also apply the
+    stake-back/refund settings, mirroring calculate_complex_outcomes.
     """
     details = []
     max_delta = (max_boost_amount / stake) if (max_boost_amount > 0 and stake > 0) else None
@@ -240,100 +350,102 @@ def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gros
             return payout_mult + sweat_free_fraction
         return payout_mult
 
-    for wins in sorted(payout_structure.keys(), reverse=True):
-        base = payout_structure[wins]
-        if base <= 0:
+    def boost_cash_for(base_gross):
+        # Boost cash on the guaranteed component only, with the dollar cap.
+        if boost_on_gross:
+            bc = (global_boost - 1.0) * base_gross
+        else:
+            bc = (global_boost - 1.0) * max(0.0, base_gross - 1.0)
+        capped = max_delta is not None and bc > max_delta
+        return (max_delta if capped else bc), bc, capped
+
+    for wins in sorted(tier_components.keys(), reverse=True):
+        floor_mult, overage_mult = tier_components[wins]
+        if floor_mult <= 0 and overage_mult <= 0:
             continue
 
-        # Display multipliers: preset base only (no leg mult)
-        unboosted = base
-        if boost_on_gross:
-            boosted = unboosted * global_boost
-        else:
-            boosted = 1.0 + (unboosted - 1.0) * global_boost
+        ov = overage_mult * (chalk_factor if wins == n_legs else 1.0)
 
-        boost_delta = boosted - unboosted
-        capped = False
-        effective = boosted
-        if max_delta is not None and boost_delta > max_delta:
-            effective = unboosted + max_delta
-            capped = True
+        # Display multipliers: standard (1.0x) legs
+        bc_eff, bc_raw, capped = boost_cash_for(floor_mult)
+        boosted = floor_mult + bc_raw + ov
+        effective = floor_mult + bc_eff + ov
 
         # Dollar amounts: apply leg_mult_product to the full-win tier
-        lmp = leg_mult_product if wins == n_legs else 1.0
-        if lmp != 1.0 and stake > 0:
-            ub_lm = base * lmp
-            if boost_on_gross:
-                b_lm = ub_lm * global_boost
-            else:
-                b_lm = 1.0 + (ub_lm - 1.0) * global_boost
-            eff_lm = b_lm
-            if max_delta is not None and (b_lm - ub_lm) > max_delta:
-                eff_lm = ub_lm + max_delta
-        else:
-            eff_lm = effective
-
-        # Apply stake-back/refund to the dollar amounts (boost_value_dollars stays
-        # boost-only, so it doesn't conflate the two adjustments).
+        lm = leg_mult_product if wins == n_legs else 1.0
+        base_gross_lm = floor_mult * lm
+        bc_eff_lm, _bc_raw_lm, capped_lm = boost_cash_for(base_gross_lm)
+        eff_lm = base_gross_lm + bc_eff_lm + ov * lm
         refunded_eff_lm = apply_refund(eff_lm)
 
-        tier_label = f"{wins}/{n_legs}"
         details.append({
-            'tier': tier_label,
-            'base_mult': base,
+            'tier': f"{wins}/{n_legs}",
+            'base_mult': floor_mult,
+            'overage_mult': ov,
+            'avg_mult': floor_mult + ov,
             'boosted_mult': boosted,
             'effective_mult': effective,
-            'capped': capped,
+            'capped': capped or capped_lm,
             'prize_dollars': refunded_eff_lm * stake if stake > 0 else 0,
             'profit_dollars': (refunded_eff_lm - 1) * stake if stake > 0 else 0,
-            'boost_value_dollars': (effective - unboosted) * stake if stake > 0 else 0,
+            'boost_value_dollars': bc_eff_lm * stake if stake > 0 else 0,
         })
     return details
 
-def evaluate_slip(n, payout_structure, probs, leg_mults, cfg):
+def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     """Run the full pipeline for one slip size against one payout ladder.
 
     Outcomes -> Kelly -> stake cap -> expected growth, exactly as the results
     table reports it. Pulled out of the calculate loop so a slip size can be
     priced against several ladders and the best one chosen; cfg carries the
     betting circumstances (boost, caps, bankroll, refunds) that all ladders
-    are compared under.
+    are compared under, and chalk_factor the parimutuel adjustment, which
+    depends on the legs rather than on the ladder.
     """
     current_probs = probs[:n]
     current_leg_mults = leg_mults[:n]
 
     def outcomes_for(max_boost_amount, stake):
         return calculate_complex_outcomes(
-            current_probs, current_leg_mults, payout_structure, cfg["boost_mult"],
+            current_probs, current_leg_mults, tier_components, cfg["boost_mult"],
             max_boost_amount=max_boost_amount, stake=stake,
             boost_on_gross=cfg["boost_on_gross"],
             sweat_free_fraction=cfg["sweat_free_fraction"],
             stake_back_on_win=cfg["stake_back_on_win"],
             refund_partial_wins=cfg["refund_partial_wins"],
+            chalk_factor=chalk_factor,
         )
 
     cap = ((cfg["max_stake_small"] if n <= 3 else cfg["max_stake_large"])
            if cfg["use_tiered_stakes"] else cfg["max_stake_input"])
 
-    def staked(f_opt):
-        stake = cfg["bankroll"] * f_opt * cfg["kelly_fraction"]
+    def staked(outc):
+        stake = cfg["bankroll"] * solve_general_kelly(outc) * cfg["kelly_fraction"]
         return min(stake, cap) if cap > 0 else stake
 
-    # First pass: uncapped outcomes determine the stake the boost cap applies at.
-    outcomes_uncapped = outcomes_for(0.0, 1.0)
-    used_stake = staked(solve_general_kelly(outcomes_uncapped))
+    # First pass: no boost cap (the cap depends on the stake, the stake on the
+    # outcomes).
+    outcomes = outcomes_for(0.0, 1.0)
+    used_stake = staked(outcomes)
 
-    # Second pass: recalculate with the dollar boost cap applied at that stake.
+    # With a boost cap, iterate outcomes<->stake to a fixed point: the cap per
+    # dollar depends on the stake, and the Kelly stake on the capped outcomes.
+    # Converges in a couple of iterations.
     if cfg["max_boost_dollars"] > 0 and used_stake > 0:
-        outcomes = outcomes_for(cfg["max_boost_dollars"], used_stake)
-    else:
-        outcomes = outcomes_uncapped
+        for _ in range(8):
+            outcomes = outcomes_for(cfg["max_boost_dollars"], used_stake)
+            new_stake = staked(outcomes)
+            if abs(new_stake - used_stake) < 0.01:
+                used_stake = new_stake
+                break
+            used_stake = new_stake
+        outcomes = (outcomes_for(cfg["max_boost_dollars"], used_stake)
+                    if used_stake > 0 else outcomes_for(0.0, 1.0))
 
     ev_decimal = sum(p * o for p, o in outcomes)
     # Win Prob (Probability of winning ANY money, i.e. net_outcome > -1)
     win_prob_any = sum(p for p, o in outcomes if o > -1.0)
 
-    used_stake = staked(solve_general_kelly(outcomes))
     used_fraction = used_stake / cfg["bankroll"] if cfg["bankroll"] > 0 else 0
     eg_bps = calculate_expected_growth(outcomes, used_fraction)
 
@@ -341,8 +453,9 @@ def evaluate_slip(n, payout_structure, probs, leg_mults, cfg):
     for m in current_leg_mults:
         leg_mult_product *= m
     details = compute_payout_details(
-        payout_structure, n, cfg["boost_mult"], cfg["boost_on_gross"],
+        tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
         cfg["max_boost_dollars"], used_stake, leg_mult_product,
+        chalk_factor=chalk_factor,
         sweat_free_fraction=cfg["sweat_free_fraction"],
         stake_back_on_win=cfg["stake_back_on_win"],
         refund_partial_wins=cfg["refund_partial_wins"],
@@ -353,6 +466,7 @@ def evaluate_slip(n, payout_structure, probs, leg_mults, cfg):
         "Stake": used_stake,
         "EG": eg_bps,
         "Details": details,
+        "HasOverage": any(ov > 0 for (_floor, ov) in tier_components.values()),
     }
 
 
@@ -392,6 +506,7 @@ PRESETS = {
         "p6": 31.08, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 58.52, "p7_i": 2.0, "p7_i2": 0.0,
         "p8": 116.9, "p8_i": 3.0, "p8_i2": 1.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
     },
     "DK Pick6 NBA Promo": {
         "p2": 3.0,
@@ -401,6 +516,7 @@ PRESETS = {
         "p6": 30.88, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 49.73, "p7_i": 2.0, "p7_i2": 0.0,
         "p8": 116.9, "p8_i": 3.0, "p8_i2": 1.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
     },
     "DK Pick6 CBB": {
         "p2": 3.22,
@@ -410,6 +526,7 @@ PRESETS = {
         "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 2.7, "f3": 5.0, "f4": 8.0, "f5": 12.0, "f6": 25.0,
     },
     "DK Pick6 CBB Promo": {
         "p2": 2.7,
@@ -419,6 +536,31 @@ PRESETS = {
         "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 2.7, "f3": 5.0, "f4": 8.0, "f5": 12.0, "f6": 25.0,
+    },
+    "DK Pick6 CFB": {
+        "p2": 3.32,
+        "p3": 7.10, "p3_i": 0.0,
+        "p4": 11.93, "p4_i": 0.0,
+        "p5": 19.33, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 35.28, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 89.00, "p7_i": 2.0, "p7_i2": 0.0,
+        "p8": 159.20, "p8_i": 3.0, "p8_i2": 1.0,
+        # 2-6 pick floors from the 8/26/26 sheet; 7/8 floors and intermediates
+        # assumed to match the NBA/MLB/NFL 40x/80x structure -- verify in app.
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
+    },
+    "DK Pick6 CFB Promo": {
+        # Derived: p_N = min(avg_N, (avg_{N-1}/floor_{N-1}) * floor_N), 2-pick = floor.
+        # (Formula reproduces the hand-entered NBA Promo preset exactly.)
+        "p2": 3.0,
+        "p3": 6.64, "p3_i": 0.0,
+        "p4": 11.83, "p4_i": 0.0,
+        "p5": 14.32, "p5_i": 1.0, "p5_i2": 0.0,
+        "p6": 35.28, "p6_i": 1.5, "p6_i2": 0.0,
+        "p7": 56.45, "p7_i": 2.0, "p7_i2": 0.0,
+        "p8": 159.20, "p8_i": 3.0, "p8_i2": 1.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
     },
     "DK Pick6 WNBA": {
         "p2": 3.1,
@@ -428,6 +570,7 @@ PRESETS = {
         "p6": 26.75, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 3.0, "f3": 5.5, "f4": 10.0, "f5": 12.0, "f6": 25.0,
     },
     "DK Pick6 WNBA Promo": {
         "p2": 3,
@@ -437,6 +580,7 @@ PRESETS = {
         "p6": 26.75, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 3.0, "f3": 5.5, "f4": 10.0, "f5": 12.0, "f6": 25.0,
     },
     "DK Pick6 UFC": {
         "p2": 3.98,
@@ -446,6 +590,7 @@ PRESETS = {
         "p6": 63.68, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 2.7, "f3": 5.0, "f4": 8.0, "f5": 10.0, "f6": 18.0,
     },
     "DK Pick6 NHL": {
         "p2": 3.82,
@@ -455,6 +600,7 @@ PRESETS = {
         "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0,
     },
     "DK Pick6 NHL Promo": {
         "p2": 3,
@@ -464,15 +610,17 @@ PRESETS = {
         "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0,
     },
     "DK Pick6 PGA": {
         "p2": 3.46,
         "p3": 6.38, "p3_i": 0.0,
         "p4": 12.42, "p4_i": 0.0,
         "p5": 15.3, "p5_i": 1.0, "p5_i2": 0.0,
-        "p6": 24.26, "p6_i": 1.5, "p6_i2": 0.0,
+        "p6": 24.26, "p6_i": 1.2, "p6_i2": 0.0,  # 5/6 floor is 1.2 for PGA
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 2.5, "f3": 4.0, "f4": 6.0, "f5": 8.0, "f6": 12.0,
     },
     "DK Pick6 MLB": {
         "p2": 3.4,
@@ -482,6 +630,7 @@ PRESETS = {
         "p6": 26.78, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 40, "p7_i": 2.0, "p7_i2": 0.0,
         "p8": 80, "p8_i": 3.0, "p8_i2": 1.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
     },
     "DK Pick6 MLB Promo": {
         "p2": 3.0,
@@ -491,6 +640,7 @@ PRESETS = {
         "p6": 26.78, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 40, "p7_i": 2.0, "p7_i2": 0.0,
         "p8": 80, "p8_i": 3.0, "p8_i2": 1.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0, "f7": 40.0, "f8": 80.0,
     },
     "DK Pick6 Soccer": {
         "p2": 3.6,
@@ -500,6 +650,8 @@ PRESETS = {
         "p6": 31.2, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        # TODO: 5/6-pick floors blank on DK sheet -- set = avg (zero overage) until known
+        "f2": 3.0, "f3": 5.5, "f4": 10.0, "f5": 19.4, "f6": 31.2,
     },
     "DK Pick6 Soccer Promo": {
         "p2": 3,
@@ -509,6 +661,8 @@ PRESETS = {
         "p6": 31.2, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        # TODO: 5/6-pick floors blank on DK sheet -- set = avg (zero overage) until known
+        "f2": 3.0, "f3": 5.5, "f4": 10.0, "f5": 15.07, "f6": 31.2,
     },
     "DK Pick6 CS2": {
         "p2": 3.1,
@@ -518,6 +672,8 @@ PRESETS = {
         "p6": 20.29, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        # TODO: 5/6-pick floors blank on DK sheet -- set = avg (zero overage) until known
+        "f2": 2.5, "f3": 4.0, "f4": 6.0, "f5": 14.94, "f6": 20.29,
     },
     "DK Pick6 CS2 Promo": {
         "p2": 2.5,
@@ -527,6 +683,7 @@ PRESETS = {
         "p6": 0.00, "p6_i": 0.0, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 2.5, "f3": 4.0, "f4": 6.0,
     },
     "DK Pick6 Valorant": {
         "p2": 3.51,
@@ -536,6 +693,7 @@ PRESETS = {
         "p6": 0, "p6_i": 0, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 2.5, "f3": 4.0, "f4": 6.0,
     },
     "DK Pick6 COD": {
         "p2": 3.31,
@@ -545,6 +703,7 @@ PRESETS = {
         "p6": 0, "p6_i": 0, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 2.5, "f3": 4.0, "f4": 6.0,
     },
     "DK Pick6 LOL": {
         "p2": 3.77,
@@ -554,6 +713,8 @@ PRESETS = {
         "p6": 20.32, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        # TODO: 5/6-pick floors blank on DK sheet -- set = avg (zero overage) until known
+        "f2": 2.5, "f3": 4.0, "f4": 6.0, "f5": 15.9, "f6": 20.32,
     },
     "DK Pick6 NFL": {
         "p2": 3.38,
@@ -563,6 +724,7 @@ PRESETS = {
         "p6": 35.72, "p6_i": 1.5, "p6_i2": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+        "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 12.0, "f6": 25.0,
     },
     "Prizepicks": {
         "p2": 3.0,
@@ -759,6 +921,7 @@ _SS_DEFAULTS = {
     "show_78": False,
     "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
     "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 20.0, "f6": 40.0, "f7": 0.0, "f8": 0.0,
 }
 for _k, _v in _SS_DEFAULTS.items():
     if _k not in st.session_state:
@@ -870,6 +1033,11 @@ if selected_preset != _prev_preset:
         # Load payout multipliers
         for _key, _val in PRESETS[selected_preset].items():
             st.session_state[_key] = _val
+        # Load guaranteed floors; presets without explicit floors (fixed-payout
+        # sites) default to floor == payout, i.e. zero overage.
+        _pdata = PRESETS[selected_preset]
+        for _n in range(2, 9):
+            st.session_state[f"f{_n}"] = _pdata.get(f"f{_n}", _pdata.get(f"p{_n}", 0.0))
 
 # --- PROMO PRESET SELECTOR ---
 _prev_promo = st.session_state.get("_prev_promo_preset", None)
@@ -978,8 +1146,29 @@ max_boost_dollars = st.sidebar.number_input(
 boost_on_gross = st.sidebar.checkbox(
     "Boost on gross payout",
     key="boost_on_gross",
-    help="Checked: boost multiplies the full payout (e.g. 50% boost on 6x → 9x, +800). "
-         "Unchecked: boost multiplies only net profit (e.g. 50% boost on 6x → 1 + 1.5×5 = 8.5x, +750)."
+    help="Boosts always apply to the guaranteed floor component only — never the "
+         "parimutuel overage. Checked: boost multiplies the full guaranteed payout "
+         "(50% boost on a 6x floor → 9x floor + overage). Unchecked: boost "
+         "multiplies only the floor's net profit (Betr-style)."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Parimutuel Overage (DK Pick6)")
+chalk_beta = st.sidebar.slider(
+    "Chalk sensitivity (β)", 0.0, 3.0, 1.0, 0.1,
+    help="Scales the all-correct parimutuel overage by (q₀/q)^β, where q is the "
+         "product of your true leg probabilities and q₀ the pool-typical slip "
+         "(50% per standard leg, ~50%/mult for multiplier legs). Chalkier slips "
+         "than typical share the pool with more winners and get less overage; "
+         "contrarian slips get more. Clamped to [0.25x, 4x]. 0 disables."
+)
+est_lower_overage = st.sidebar.checkbox(
+    "Estimate lower-tier overage", value=True,
+    help="Intermediate tiers (4/5, 5/6, ...) only have guaranteed floors — DK "
+         "publishes no averages for them. When checked, the top-tier overage is "
+         "apportioned to lower tiers by per-winner parimutuel intensity "
+         "(tier pool share ÷ expected fraction of pool entries in that tier). "
+         "Unchecked = lower tiers pay floors only (conservative)."
 )
 
 st.sidebar.markdown("---")
@@ -1132,6 +1321,23 @@ with c5:
     p6_i = col_b.number_input("5/6", value=st.session_state.get("p6_i", 0.0), key="p6_i")
     p6_i2 = col_c.number_input("4/6", value=st.session_state.get("p6_i2", 0.0), key="p6_i2")
 
+with st.expander("Guaranteed Floors — all-correct tier (splits averages into floor + parimutuel overage)"):
+    st.caption(
+        "The top-tier values above are 30-day AVERAGE payouts; enter the guaranteed "
+        "minimums here (DK preset floors as of 8/26/26 load automatically). "
+        "Overage = average − floor. For fixed-payout sites leave floors equal to "
+        "the payouts (zero overage). Intermediate-tier inputs (4/5, 5/6, ...) are "
+        "already guaranteed floors."
+    )
+    fc = st.columns(7)
+    f2 = fc[0].number_input("2-Pick Floor", value=st.session_state.get("f2", 3.0), key="f2")
+    f3 = fc[1].number_input("3-Pick Floor", value=st.session_state.get("f3", 6.0), key="f3")
+    f4 = fc[2].number_input("4/4 Floor", value=st.session_state.get("f4", 10.0), key="f4")
+    f5 = fc[3].number_input("5/5 Floor", value=st.session_state.get("f5", 20.0), key="f5")
+    f6 = fc[4].number_input("6/6 Floor", value=st.session_state.get("f6", 40.0), key="f6")
+    f7 = fc[5].number_input("7/7 Floor", value=st.session_state.get("f7", 0.0), key="f7")
+    f8 = fc[6].number_input("8/8 Floor", value=st.session_state.get("f8", 0.0), key="f8")
+
 # Toggle for 7-Pick and 8-Pick options
 show_78 = st.checkbox(
     "Show 7-Pick & 8-Pick options",
@@ -1203,23 +1409,32 @@ if st.button("Calculate EV & Stakes", type="primary"):
     results = []
 
     # Define the payout structures for each slip size based on inputs
-    # Format: {num_wins: multiplier}
+    # Format: (N, {num_wins: avg payout mult}, {num_wins: guaranteed floor mult})
+    # Top tier: preset value = 30-day average payout; floor input = guaranteed
+    # minimum. Intermediate tiers are floors in BOTH dicts (no average data is
+    # published for them); their overage is estimated in build_tier_components.
+    # The slip-scale s applies to floors and averages alike, so the overage
+    # scales proportionally with the displayed slip multiplier.
     s = payout_scale
     # scaled_tiers drops any tier that does not pay. A tier keyed at 0.0 counts
     # as a win paying nothing, which is not the same as a complete loss: under
     # "Refund on Loss" with partial refunds off, the zero-keyed tier forfeits
     # the refund a loss would collect. Unused tiers must be absent, not zero.
     slip_configs = [
-        # (N, payout_dict)
-        (2, scaled_tiers({2: p2}, s)),
-        (3, scaled_tiers({3: p3, 2: p3_i}, s)),
-        (4, scaled_tiers({4: p4, 3: p4_i}, s)),
-        (5, scaled_tiers({5: p5, 4: p5_i, 3: p5_i2}, s)),
-        (6, scaled_tiers({6: p6, 5: p6_i, 4: p6_i2}, s)),
+        # (N, avg payouts, guaranteed floors)
+        (2, scaled_tiers({2: p2}, s), scaled_tiers({2: f2}, s)),
+        (3, scaled_tiers({3: p3, 2: p3_i}, s), scaled_tiers({3: f3, 2: p3_i}, s)),
+        (4, scaled_tiers({4: p4, 3: p4_i}, s), scaled_tiers({4: f4, 3: p4_i}, s)),
+        (5, scaled_tiers({5: p5, 4: p5_i, 3: p5_i2}, s),
+            scaled_tiers({5: f5, 4: p5_i, 3: p5_i2}, s)),
+        (6, scaled_tiers({6: p6, 5: p6_i, 4: p6_i2}, s),
+            scaled_tiers({6: f6, 5: p6_i, 4: p6_i2}, s)),
     ]
     if show_78:
-        slip_configs.append((7, scaled_tiers({7: p7, 6: p7_i, 5: p7_i2}, s)))
-        slip_configs.append((8, scaled_tiers({8: p8, 7: p8_i, 6: p8_i2}, s)))
+        slip_configs.append((7, scaled_tiers({7: p7, 6: p7_i, 5: p7_i2}, s),
+                                scaled_tiers({7: f7, 6: p7_i, 5: p7_i2}, s)))
+        slip_configs.append((8, scaled_tiers({8: p8, 7: p8_i, 6: p8_i2}, s),
+                                scaled_tiers({8: f8, 7: p8_i, 6: p8_i2}, s)))
 
     # Every ladder for a given slip size is priced under the same circumstances.
     cfg = {
@@ -1239,18 +1454,31 @@ if st.button("Calculate EV & Stakes", type="primary"):
     _comparing = bool(_variants) and _ladder_choice == LADDER_AUTO
     _box_label = _ladder_choice if (_variants and not _comparing) else "Payout boxes"
 
-    for n, box_structure in slip_configs:
+    for n, avg_structure, floor_structure in slip_configs:
+        # The chalk adjustment depends on the legs, not the ladder, so every
+        # candidate for this slip size is priced under the same factor.
+        chalk = chalk_overage_factor(probs[:n], leg_mults[:n], beta=chalk_beta)
+
         # Compare the site's published ladders for this slip size; fall back to
         # the payout boxes for sizes no ladder covers (and when not comparing).
+        # A variant ladder is a fixed published payout, so its floor equals its
+        # payout and it carries no overage; the boxes hold averages and floors
+        # separately.
         candidates = []
         if _comparing:
-            candidates = [(name, scaled_tiers(ladder[n], s))
-                          for name, ladder in _variants.items() if n in ladder]
+            for _name, _ladder in _variants.items():
+                if n in _ladder:
+                    _tiers = scaled_tiers(_ladder[n], s)
+                    candidates.append((_name, _tiers, _tiers))
         if not candidates:
-            candidates = [(_box_label, box_structure)]
+            candidates = [(_box_label, avg_structure, floor_structure)]
 
-        priced = [(name, evaluate_slip(n, structure, probs, leg_mults, cfg))
-                  for name, structure in candidates]
+        priced = []
+        for _name, _avg, _floor in candidates:
+            _comps = build_tier_components(
+                _avg, _floor, n, estimate_lower_tier_overage=est_lower_overage)
+            priced.append(
+                (_name, evaluate_slip(n, _comps, probs, leg_mults, cfg, chalk_factor=chalk)))
 
         # Expected growth decides. EV breaks ties, which matters when no stake
         # is warranted at all: growth is 0 for every ladder at a zero stake.
@@ -1260,16 +1488,23 @@ if st.button("Calculate EV & Stakes", type="primary"):
         result["Size"] = f"{n}-Pick"
         result["Ladder"] = best_name
         result["Priced"] = priced
+        result["Chalk"] = chalk
         results.append(result)
 
     # --- DISPLAY RESULTS ---
     _any_compared = any(len(res['Priced']) > 1 for res in results)
+    any_overage = any(res['HasOverage'] for res in results)
 
     if use_tiered_stakes and (max_stake_small > 0 or max_stake_large > 0):
         _large_label = "4-8 picks" if show_78 else "4-6 picks"
         st.info(f"Stakes capped by slip size — 2-3 picks: ${max_stake_small:.2f} | {_large_label}: ${max_stake_large:.2f}")
     elif max_stake_input > 0:
         st.info(f"Stakes capped at maximum: ${max_stake_input:.2f}")
+
+    if any_overage:
+        _chalk_note = ", ".join(f"{r['Size']}: {r['Chalk']:.2f}x" for r in results if r['HasOverage'])
+        st.info(f"Parimutuel overage active — payouts = guaranteed floor + overage. "
+                f"Boosts apply to the floor only. Chalk factor on all-correct overage — {_chalk_note}")
 
     if sweat_free_enabled:
         if stake_back_on_win:
@@ -1309,6 +1544,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
             "Rec. Stake": f"${res['Stake']:.2f}",
             "Hit Rate (Any Prize)": f"{res['Any Win %']*100:.1f}%",
         })
+        if any_overage:
+            row["Chalk ×"] = f"{res['Chalk']:.2f}" if res['HasOverage'] else "—"
         if top_detail and res['Stake'] > 0:
             row["Top Prize"] = f"${top_detail['prize_dollars']:.2f}"
             row["Top Profit"] = f"${top_detail['profit_dollars']:.2f}"
@@ -1336,7 +1573,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
                     "Exp. Growth (bps)": f"{stats['EG']:.2f}",
                     "EV %": f"{stats['EV']*100:.2f}%",
                     "Rec. Stake": f"${stats['Stake']:.2f}",
-                    "Top Payout": f"{top['base_mult']:.2f}x" if top else "—",
+                    "Top Payout": f"{top['avg_mult']:.2f}x" if top else "—",
                     "Hit Rate (Any Prize)": f"{stats['Any Win %']*100:.1f}%",
                 })
         st.table(comparison_data)
@@ -1352,10 +1589,14 @@ if st.button("Calculate EV & Stakes", type="primary"):
             _std_leg_label = f"standard ({_ud_base:.2f}x) leg prices" if _ud_format else "standard (1.0x) leg multipliers"
             st.caption(f"ℹ️ Payouts shown assume {_std_leg_label}. "
                        "Actual payouts vary based on which specific legs win.")
+        if any_overage:
+            st.caption("Floor = guaranteed minimum. Overage = estimated parimutuel extra "
+                       "(chalk-adjusted on the all-correct tier; intensity-apportioned on "
+                       "lower tiers). Boosts apply to the floor only — never the overage.")
         if has_boost and not boost_on_gross:
-            st.caption("Boost mode: Net — boost applies to profit portion only (payout − stake).")
+            st.caption("Boost mode: Net — boost applies to the profit portion of the guaranteed floor only.")
         elif has_boost:
-            st.caption("Boost mode: Gross — boost applies to the full payout.")
+            st.caption("Boost mode: Gross — boost applies to the full guaranteed floor.")
 
         breakdown_data = []
         for res in results:
@@ -1367,8 +1608,11 @@ if st.button("Calculate EV & Stakes", type="primary"):
                     row["Ladder"] = res['Ladder']
                 row.update({
                     "Tier": detail['tier'],
-                    "Base Payout": f"{detail['base_mult']:.2f}x",
+                    "Floor": f"{detail['base_mult']:.2f}x",
                 })
+                if any_overage:
+                    row["Overage (est.)"] = f"{detail['overage_mult']:.2f}x"
+                    row["Avg Total"] = f"{detail['avg_mult']:.2f}x"
                 if has_boost:
                     row["Boosted Payout"] = f"{detail['boosted_mult']:.2f}x"
                     if any_capped:
