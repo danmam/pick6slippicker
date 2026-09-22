@@ -290,6 +290,72 @@ def compute_payout_details(payout_structure, n_legs, global_boost, boost_on_gros
         })
     return details
 
+def evaluate_slip(n, payout_structure, probs, leg_mults, cfg):
+    """Run the full pipeline for one slip size against one payout ladder.
+
+    Outcomes -> Kelly -> stake cap -> expected growth, exactly as the results
+    table reports it. Pulled out of the calculate loop so a slip size can be
+    priced against several ladders and the best one chosen; cfg carries the
+    betting circumstances (boost, caps, bankroll, refunds) that all ladders
+    are compared under.
+    """
+    current_probs = probs[:n]
+    current_leg_mults = leg_mults[:n]
+
+    def outcomes_for(max_boost_amount, stake):
+        return calculate_complex_outcomes(
+            current_probs, current_leg_mults, payout_structure, cfg["boost_mult"],
+            max_boost_amount=max_boost_amount, stake=stake,
+            boost_on_gross=cfg["boost_on_gross"],
+            sweat_free_fraction=cfg["sweat_free_fraction"],
+            stake_back_on_win=cfg["stake_back_on_win"],
+            refund_partial_wins=cfg["refund_partial_wins"],
+        )
+
+    cap = ((cfg["max_stake_small"] if n <= 3 else cfg["max_stake_large"])
+           if cfg["use_tiered_stakes"] else cfg["max_stake_input"])
+
+    def staked(f_opt):
+        stake = cfg["bankroll"] * f_opt * cfg["kelly_fraction"]
+        return min(stake, cap) if cap > 0 else stake
+
+    # First pass: uncapped outcomes determine the stake the boost cap applies at.
+    outcomes_uncapped = outcomes_for(0.0, 1.0)
+    used_stake = staked(solve_general_kelly(outcomes_uncapped))
+
+    # Second pass: recalculate with the dollar boost cap applied at that stake.
+    if cfg["max_boost_dollars"] > 0 and used_stake > 0:
+        outcomes = outcomes_for(cfg["max_boost_dollars"], used_stake)
+    else:
+        outcomes = outcomes_uncapped
+
+    ev_decimal = sum(p * o for p, o in outcomes)
+    # Win Prob (Probability of winning ANY money, i.e. net_outcome > -1)
+    win_prob_any = sum(p for p, o in outcomes if o > -1.0)
+
+    used_stake = staked(solve_general_kelly(outcomes))
+    used_fraction = used_stake / cfg["bankroll"] if cfg["bankroll"] > 0 else 0
+    eg_bps = calculate_expected_growth(outcomes, used_fraction)
+
+    leg_mult_product = 1.0
+    for m in current_leg_mults:
+        leg_mult_product *= m
+    details = compute_payout_details(
+        payout_structure, n, cfg["boost_mult"], cfg["boost_on_gross"],
+        cfg["max_boost_dollars"], used_stake, leg_mult_product,
+        sweat_free_fraction=cfg["sweat_free_fraction"],
+        stake_back_on_win=cfg["stake_back_on_win"],
+        refund_partial_wins=cfg["refund_partial_wins"],
+    )
+    return {
+        "EV": ev_decimal,
+        "Any Win %": win_prob_any,
+        "Stake": used_stake,
+        "EG": eg_bps,
+        "Details": details,
+    }
+
+
 # --- PRESETS DATA ---
 PRESETS = {
     "Custom": None,
@@ -564,6 +630,65 @@ PRESETS = {
     },
 }
 
+# --- VARIANT PAYOUT LADDERS ---
+# Some sites publish more than one payout ladder for the same slip size and
+# let you choose per entry. Each variant maps slip size -> {wins: multiplier};
+# a slip size a variant does not offer is simply absent (Underdog has no
+# 2-leg Flex ladder). Which ladder is best depends on the whole betting
+# situation -- leg odds, boosts, stake caps, refunds -- so the choice is made
+# per slip size at calculate time by expected growth, not fixed here.
+PRESET_VARIANTS = {
+    "Underdog Fantasy": {
+        "Power": {
+            2: {2: 3.5},
+            3: {3: 6.5},
+            4: {4: 12.0},
+            5: {5: 20.0},
+            6: {6: 35.0},
+        },
+        "Flex": {
+            3: {3: 3.25, 2: 1.09},
+            4: {4: 7.2, 3: 1.4},
+            5: {5: 10.0, 4: 2.5},
+            6: {6: 25.0, 5: 2.6, 4: 0.25},
+        },
+    },
+}
+
+# Selector value meaning "compare every ladder and keep the best".
+LADDER_AUTO = "Auto — highest EG"
+
+# Payout-box keys per slip size, highest tier first: (n_legs, [(wins, key)]).
+_LADDER_BOX_KEYS = {
+    2: [(2, "p2")],
+    3: [(3, "p3"), (2, "p3_i")],
+    4: [(4, "p4"), (3, "p4_i")],
+    5: [(5, "p5"), (4, "p5_i"), (3, "p5_i2")],
+    6: [(6, "p6"), (5, "p6_i"), (4, "p6_i2")],
+    7: [(7, "p7"), (6, "p7_i"), (5, "p7_i2")],
+    8: [(8, "p8"), (7, "p8_i"), (6, "p8_i2")],
+}
+
+
+def ladder_to_boxes(ladder):
+    """Flatten a variant ladder into the payout-input values it corresponds to."""
+    boxes = {}
+    for n, keys in _LADDER_BOX_KEYS.items():
+        tiers = ladder.get(n, {})
+        for wins, key in keys:
+            boxes[key] = float(tiers.get(wins, 0.0))
+    return boxes
+
+
+def scaled_tiers(tiers, scale):
+    """Scale a ladder's tiers, dropping any that do not pay.
+
+    A tier present at 0.0 counts as a win paying nothing, which forfeits the
+    complete-loss refund -- so an unpaid tier must be absent, not zero.
+    """
+    return {wins: mult * scale for wins, mult in tiers.items() if mult > 0}
+
+
 # Leg-multiplier input format per preset. Presets not listed use the standard
 # 1.0x scale; "underdog" presets take leg prices as Underdog displays them.
 _PRESET_LEG_MULT_FORMATS = {
@@ -736,6 +861,8 @@ if selected_preset != _prev_preset:
         st.session_state["boost_on_gross"] = True
         st.session_state["use_std_leg_mults"] = True
         _cv_set("leg_mult_format", _PRESET_LEG_MULT_FORMATS.get(selected_preset, "standard"))
+        _cv_set("ladder_choice", LADDER_AUTO)
+        st.session_state["_prev_ladder_choice"] = LADDER_AUTO
         st.session_state["use_tiered_stakes"] = False
         st.session_state["max_stake_small"] = 0.0
         st.session_state["max_stake_large"] = 0.0
@@ -943,6 +1070,36 @@ if not use_std_leg_mults:
 # --- MAIN PAGE ---
 
 st.header("1. Payout Structure (Base Multipliers)")
+
+# A preset with several published ladders is compared per slip size instead of
+# being pinned to one. Rendered before the payout boxes so picking a specific
+# ladder can fill them on this same run.
+_variants = PRESET_VARIANTS.get(selected_preset)
+_ladder_choice = LADDER_AUTO
+if _variants:
+    _options = [LADDER_AUTO] + list(_variants.keys())
+    _ladder_choice = _cv_selectbox(
+        st, "Payout ladder", "ladder_choice", _options, LADDER_AUTO,
+        help="Auto prices every ladder this site offers for each slip size under "
+             "your current odds, boosts and stake caps, and keeps the one with the "
+             "highest expected growth. Picking a ladder by name loads it into the "
+             "boxes below instead, where you can edit it."
+    )
+    # Loading a named ladder writes it into the payout boxes once, so it stays
+    # editable afterwards rather than being overwritten on every rerun.
+    if _ladder_choice != st.session_state.get("_prev_ladder_choice"):
+        st.session_state["_prev_ladder_choice"] = _ladder_choice
+        if _ladder_choice != LADDER_AUTO:
+            for _key, _val in ladder_to_boxes(_variants[_ladder_choice]).items():
+                st.session_state[_key] = _val
+    if _ladder_choice == LADDER_AUTO:
+        _covered = sorted({n for lad in _variants.values() for n in lad})
+        st.caption(
+            f"Auto: comparing {' and '.join(_variants)} by expected growth for "
+            f"{', '.join(f'{n}-pick' for n in _covered)}. The boxes below are used "
+            "only for slip sizes those ladders do not cover."
+        )
+
 # Row 1: 2, 3, 4 picks
 c1, c2, c3 = st.columns(3)
 p2 = c1.number_input("2-Pick Win", value=st.session_state.get("p2", 3.0), key="p2")
@@ -1067,92 +1224,50 @@ if st.button("Calculate EV & Stakes", type="primary"):
         slip_configs.append((7, {7: p7 * s, 6: p7_i * s, 5: p7_i2 * s}))
         slip_configs.append((8, {8: p8 * s, 7: p8_i * s, 6: p8_i2 * s}))
 
-    for n, payout_structure in slip_configs:
-        current_probs = probs[:n]
-        current_leg_mults = leg_mults[:n]
+    # Every ladder for a given slip size is priced under the same circumstances.
+    cfg = {
+        "boost_mult": boost_mult,
+        "boost_on_gross": boost_on_gross,
+        "max_boost_dollars": max_boost_dollars,
+        "sweat_free_fraction": sweat_free_fraction,
+        "stake_back_on_win": stake_back_on_win,
+        "refund_partial_wins": refund_partial_wins,
+        "bankroll": bankroll,
+        "kelly_fraction": kelly_fraction,
+        "use_tiered_stakes": use_tiered_stakes,
+        "max_stake_small": max_stake_small,
+        "max_stake_large": max_stake_large,
+        "max_stake_input": max_stake_input,
+    }
+    _comparing = bool(_variants) and _ladder_choice == LADDER_AUTO
+    _box_label = _ladder_choice if (_variants and not _comparing) else "Payout boxes"
 
-        # First pass: Calculate outcomes without cap to determine stake
-        outcomes_uncapped = calculate_complex_outcomes(
-            current_probs,
-            current_leg_mults,
-            payout_structure,
-            boost_mult,
-            max_boost_amount=0.0,
-            stake=1.0,
-            boost_on_gross=boost_on_gross,
-            sweat_free_fraction=sweat_free_fraction,
-            stake_back_on_win=stake_back_on_win,
-            refund_partial_wins=refund_partial_wins
-        )
+    for n, box_structure in slip_configs:
+        # Compare the site's published ladders for this slip size; fall back to
+        # the payout boxes for sizes no ladder covers (and when not comparing).
+        candidates = []
+        if _comparing:
+            candidates = [(name, scaled_tiers(ladder[n], s))
+                          for name, ladder in _variants.items() if n in ladder]
+        if not candidates:
+            candidates = [(_box_label, box_structure)]
 
-        # Determine stake from uncapped outcomes
-        f_opt_uncapped = solve_general_kelly(outcomes_uncapped)
-        kelly_stake = bankroll * f_opt_uncapped * kelly_fraction
-        # Apply max stake cap if specified
-        _cap = (max_stake_small if n <= 3 else max_stake_large) if use_tiered_stakes else max_stake_input
-        if _cap > 0:
-            used_stake = min(kelly_stake, _cap)
-        else:
-            used_stake = kelly_stake
+        priced = [(name, evaluate_slip(n, structure, probs, leg_mults, cfg))
+                  for name, structure in candidates]
 
-        # Second pass: Recalculate outcomes with cap applied using the determined stake
-        if max_boost_dollars > 0 and used_stake > 0:
-            outcomes = calculate_complex_outcomes(
-                current_probs,
-                current_leg_mults,
-                payout_structure,
-                boost_mult,
-                max_boost_amount=max_boost_dollars,
-                stake=used_stake,
-                boost_on_gross=boost_on_gross,
-                sweat_free_fraction=sweat_free_fraction,
-                stake_back_on_win=stake_back_on_win,
-                refund_partial_wins=refund_partial_wins
-            )
-        else:
-            outcomes = outcomes_uncapped
+        # Expected growth decides. EV breaks ties, which matters when no stake
+        # is warranted at all: growth is 0 for every ladder at a zero stake.
+        best_name, best = max(priced, key=lambda kv: (kv[1]["EG"], kv[1]["EV"]))
 
-        # Calculate Stats from (potentially capped) outcomes
-        ev_decimal = sum(p * n_out for p, n_out in outcomes)
-
-        # Win Prob (Probability of winning ANY money, i.e. net_outcome > -1)
-        win_prob_any = sum(p for p, n_out in outcomes if n_out > -1.0)
-
-        # Kelly & Growth from capped outcomes
-        f_opt = solve_general_kelly(outcomes)
-        kelly_stake_capped = bankroll * f_opt * kelly_fraction
-
-        # Apply max stake cap if specified
-        if _cap > 0:
-            used_stake = min(kelly_stake_capped, _cap)
-        else:
-            used_stake = kelly_stake_capped
-
-        used_fraction = used_stake / bankroll if bankroll > 0 else 0
-        eg_bps = calculate_expected_growth(outcomes, used_fraction)
-
-        # Compute payout details per win tier for display
-        leg_mult_product = 1.0
-        for m in current_leg_mults:
-            leg_mult_product *= m
-        payout_details = compute_payout_details(
-            payout_structure, n, boost_mult, boost_on_gross,
-            max_boost_dollars, used_stake, leg_mult_product,
-            sweat_free_fraction=sweat_free_fraction,
-            stake_back_on_win=stake_back_on_win,
-            refund_partial_wins=refund_partial_wins
-        )
-
-        results.append({
-            "Size": f"{n}-Pick",
-            "EV": ev_decimal,
-            "Any Win %": win_prob_any,
-            "Stake": used_stake,
-            "EG": eg_bps,
-            "Details": payout_details
-        })
+        result = dict(best)
+        result["Size"] = f"{n}-Pick"
+        result["Ladder"] = best_name
+        result["Priced"] = priced
+        results.append(result)
 
     # --- DISPLAY RESULTS ---
+    _any_compared = any(len(res['Priced']) > 1 for res in results)
+
     if use_tiered_stakes and (max_stake_small > 0 or max_stake_large > 0):
         _large_label = "4-8 picks" if show_78 else "4-6 picks"
         st.info(f"Stakes capped by slip size — 2-3 picks: ${max_stake_small:.2f} | {_large_label}: ${max_stake_large:.2f}")
@@ -1178,7 +1293,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
             label=res['Size'],
             value=f"{res['EV']*100:.1f}% EV",
             delta=f"{res['EG']:.1f} bps",
-            help=f"Stake: ${res['Stake']:.2f}"
+            help=(f"Stake: ${res['Stake']:.2f}" +
+                  (f" | Ladder: {res['Ladder']}" if _any_compared else ""))
         )
 
     # Detailed Summary Table
@@ -1187,16 +1303,46 @@ if st.button("Calculate EV & Stakes", type="primary"):
         top_detail = res['Details'][0] if res['Details'] else None
         row = {
             "Slip Size": res['Size'],
+        }
+        if _any_compared:
+            row["Ladder"] = res['Ladder']
+        row.update({
             "EV %": f"{res['EV']*100:.2f}%",
             "Exp. Growth (bps)": f"{res['EG']:.2f}",
             "Rec. Stake": f"${res['Stake']:.2f}",
             "Hit Rate (Any Prize)": f"{res['Any Win %']*100:.1f}%",
-        }
+        })
         if top_detail and res['Stake'] > 0:
             row["Top Prize"] = f"${top_detail['prize_dollars']:.2f}"
             row["Top Profit"] = f"${top_detail['profit_dollars']:.2f}"
         table_data.append(row)
     st.table(table_data)
+
+    # Ladder Comparison -- every ladder priced, not just the winner
+    if _any_compared:
+        st.subheader("Ladder Comparison (by Expected Growth)")
+        st.caption(
+            "Each ladder priced under the same odds, boosts, refunds and stake caps. "
+            "The chosen one has the highest expected growth, which already accounts "
+            "for the stake Kelly sizes it at — so it need not be the highest EV."
+        )
+        comparison_data = []
+        for res in results:
+            if len(res['Priced']) < 2:
+                continue
+            for name, stats in sorted(res['Priced'], key=lambda kv: -kv[1]['EG']):
+                top = stats['Details'][0] if stats['Details'] else None
+                comparison_data.append({
+                    "Slip": res['Size'],
+                    "Ladder": name,
+                    "Chosen": "✓" if name == res['Ladder'] else "",
+                    "Exp. Growth (bps)": f"{stats['EG']:.2f}",
+                    "EV %": f"{stats['EV']*100:.2f}%",
+                    "Rec. Stake": f"${stats['Stake']:.2f}",
+                    "Top Payout": f"{top['base_mult']:.2f}x" if top else "—",
+                    "Hit Rate (Any Prize)": f"{stats['Any Win %']*100:.1f}%",
+                })
+        st.table(comparison_data)
 
     # Payout Breakdown
     has_boost = boost_mult != 1.0
@@ -1219,9 +1365,13 @@ if st.button("Calculate EV & Stakes", type="primary"):
             for detail in res['Details']:
                 row = {
                     "Slip": res['Size'],
+                }
+                if _any_compared:
+                    row["Ladder"] = res['Ladder']
+                row.update({
                     "Tier": detail['tier'],
                     "Base Payout": f"{detail['base_mult']:.2f}x",
-                }
+                })
                 if has_boost:
                     row["Boosted Payout"] = f"{detail['boosted_mult']:.2f}x"
                     if any_capped:
