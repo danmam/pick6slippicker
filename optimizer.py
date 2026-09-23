@@ -392,19 +392,97 @@ def compute_payout_details(tier_components, n_legs, global_boost, boost_on_gross
         })
     return details
 
+def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
+    """Run the full pipeline for one slip size against one payout ladder.
+
+    Outcomes -> Kelly -> stake cap -> expected growth, exactly as the results
+    table reports it. Pulled out of the calculate loop so a slip size can be
+    priced against several ladders and the best one chosen; cfg carries the
+    betting circumstances (boost, caps, bankroll, refunds) that all ladders
+    are compared under, and chalk_factor the parimutuel adjustment, which
+    depends on the legs rather than on the ladder.
+    """
+    current_probs = probs[:n]
+    current_leg_mults = leg_mults[:n]
+
+    def outcomes_for(max_boost_amount, stake):
+        return calculate_complex_outcomes(
+            current_probs, current_leg_mults, tier_components, cfg["boost_mult"],
+            max_boost_amount=max_boost_amount, stake=stake,
+            boost_on_gross=cfg["boost_on_gross"],
+            sweat_free_fraction=cfg["sweat_free_fraction"],
+            stake_back_on_win=cfg["stake_back_on_win"],
+            refund_partial_wins=cfg["refund_partial_wins"],
+            chalk_factor=chalk_factor,
+        )
+
+    cap = ((cfg["max_stake_small"] if n <= 3 else cfg["max_stake_large"])
+           if cfg["use_tiered_stakes"] else cfg["max_stake_input"])
+
+    def staked(outc):
+        stake = cfg["bankroll"] * solve_general_kelly(outc) * cfg["kelly_fraction"]
+        return min(stake, cap) if cap > 0 else stake
+
+    # First pass: no boost cap (the cap depends on the stake, the stake on the
+    # outcomes).
+    outcomes = outcomes_for(0.0, 1.0)
+    used_stake = staked(outcomes)
+
+    # With a boost cap, iterate outcomes<->stake to a fixed point: the cap per
+    # dollar depends on the stake, and the Kelly stake on the capped outcomes.
+    # Converges in a couple of iterations.
+    if cfg["max_boost_dollars"] > 0 and used_stake > 0:
+        for _ in range(8):
+            outcomes = outcomes_for(cfg["max_boost_dollars"], used_stake)
+            new_stake = staked(outcomes)
+            if abs(new_stake - used_stake) < 0.01:
+                used_stake = new_stake
+                break
+            used_stake = new_stake
+        outcomes = (outcomes_for(cfg["max_boost_dollars"], used_stake)
+                    if used_stake > 0 else outcomes_for(0.0, 1.0))
+
+    ev_decimal = sum(p * o for p, o in outcomes)
+    # Win Prob (Probability of winning ANY money, i.e. net_outcome > -1)
+    win_prob_any = sum(p for p, o in outcomes if o > -1.0)
+
+    used_fraction = used_stake / cfg["bankroll"] if cfg["bankroll"] > 0 else 0
+    eg_bps = calculate_expected_growth(outcomes, used_fraction)
+
+    leg_mult_product = 1.0
+    for m in current_leg_mults:
+        leg_mult_product *= m
+    details = compute_payout_details(
+        tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
+        cfg["max_boost_dollars"], used_stake, leg_mult_product,
+        chalk_factor=chalk_factor,
+        sweat_free_fraction=cfg["sweat_free_fraction"],
+        stake_back_on_win=cfg["stake_back_on_win"],
+        refund_partial_wins=cfg["refund_partial_wins"],
+    )
+    return {
+        "EV": ev_decimal,
+        "Any Win %": win_prob_any,
+        "Stake": used_stake,
+        "EG": eg_bps,
+        "Details": details,
+        "HasOverage": any(ov > 0 for (_floor, ov) in tier_components.values()),
+    }
+
+
 # --- PRESETS DATA ---
 PRESETS = {
     "Custom": None,
     "Betr Nukes": {
         "p2": 6.0,
-        "p3": 10.0,
+        "p3": 10.0, "p3_i": 0.0,
         "p4": 20.0, "p4_i": 0.0,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
     "Betr Picks": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 6.0, "p4_i": 1.5,
         "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
         "p6": 20.0, "p6_i": 1.5, "p6_i2": 1.0,
@@ -413,7 +491,7 @@ PRESETS = {
     },
     "Dabble": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 0.0, "p6_i": 0.0, "p6_i2": 0.0,
@@ -422,7 +500,7 @@ PRESETS = {
     },
     "DK Pick6 NBA": {
         "p2": 3.08,
-        "p3": 6.175,
+        "p3": 6.175, "p3_i": 0.0,
         "p4": 10.94, "p4_i": 0.0,
         "p5": 14.82, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 31.08, "p6_i": 1.5, "p6_i2": 0.0,
@@ -432,7 +510,7 @@ PRESETS = {
     },
     "DK Pick6 NBA Promo": {
         "p2": 3.0,
-        "p3": 6.16,
+        "p3": 6.16, "p3_i": 0.0,
         "p4": 10.29, "p4_i": 0.0,
         "p5": 13.13, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 30.88, "p6_i": 1.5, "p6_i2": 0.0,
@@ -442,7 +520,7 @@ PRESETS = {
     },
     "DK Pick6 CBB": {
         "p2": 3.22,
-        "p3": 5.51,
+        "p3": 5.51, "p3_i": 0.0,
         "p4": 11.83, "p4_i": 0.0,
         "p5": 21.01, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
@@ -452,7 +530,7 @@ PRESETS = {
     },
     "DK Pick6 CBB Promo": {
         "p2": 2.7,
-        "p3": 5.51,
+        "p3": 5.51, "p3_i": 0.0,
         "p4": 8.81, "p4_i": 0.0,
         "p5": 17.74, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 42.89, "p6_i": 1.5, "p6_i2": 0.0,
@@ -462,7 +540,7 @@ PRESETS = {
     },
     "DK Pick6 CFB": {
         "p2": 3.32,
-        "p3": 7.10,
+        "p3": 7.10, "p3_i": 0.0,
         "p4": 11.93, "p4_i": 0.0,
         "p5": 19.33, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 35.28, "p6_i": 1.5, "p6_i2": 0.0,
@@ -476,7 +554,7 @@ PRESETS = {
         # Derived: p_N = min(avg_N, (avg_{N-1}/floor_{N-1}) * floor_N), 2-pick = floor.
         # (Formula reproduces the hand-entered NBA Promo preset exactly.)
         "p2": 3.0,
-        "p3": 6.64,
+        "p3": 6.64, "p3_i": 0.0,
         "p4": 11.83, "p4_i": 0.0,
         "p5": 14.32, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 35.28, "p6_i": 1.5, "p6_i2": 0.0,
@@ -486,7 +564,7 @@ PRESETS = {
     },
     "DK Pick6 WNBA": {
         "p2": 3.1,
-        "p3": 5.55,
+        "p3": 5.55, "p3_i": 0.0,
         "p4": 10.05, "p4_i": 0.0,
         "p5": 13.55, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.75, "p6_i": 1.5, "p6_i2": 0.0,
@@ -496,7 +574,7 @@ PRESETS = {
     },
     "DK Pick6 WNBA Promo": {
         "p2": 3,
-        "p3": 5.55,
+        "p3": 5.55, "p3_i": 0.0,
         "p4": 10.05, "p4_i": 0.0,
         "p5": 12.06, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.75, "p6_i": 1.5, "p6_i2": 0.0,
@@ -506,7 +584,7 @@ PRESETS = {
     },
     "DK Pick6 UFC": {
         "p2": 3.98,
-        "p3": 8.48,
+        "p3": 8.48, "p3_i": 0.0,
         "p4": 15.9, "p4_i": 0.0,
         "p5": 21.62, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 63.68, "p6_i": 1.5, "p6_i2": 0.0,
@@ -516,7 +594,7 @@ PRESETS = {
     },
     "DK Pick6 NHL": {
         "p2": 3.82,
-        "p3": 7.06,
+        "p3": 7.06, "p3_i": 0.0,
         "p4": 12.74, "p4_i": 0.0,
         "p5": 16.54, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
@@ -526,7 +604,7 @@ PRESETS = {
     },
     "DK Pick6 NHL Promo": {
         "p2": 3,
-        "p3": 7.06,
+        "p3": 7.06, "p3_i": 0.0,
         "p4": 11.77, "p4_i": 0.0,
         "p5": 15.29, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 28.13, "p6_i": 1.5, "p6_i2": 0.0,
@@ -536,7 +614,7 @@ PRESETS = {
     },
     "DK Pick6 PGA": {
         "p2": 3.46,
-        "p3": 6.38,
+        "p3": 6.38, "p3_i": 0.0,
         "p4": 12.42, "p4_i": 0.0,
         "p5": 15.3, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 24.26, "p6_i": 1.2, "p6_i2": 0.0,  # 5/6 floor is 1.2 for PGA
@@ -546,7 +624,7 @@ PRESETS = {
     },
     "DK Pick6 MLB": {
         "p2": 3.4,
-        "p3": 6.64,
+        "p3": 6.64, "p3_i": 0.0,
         "p4": 10.64, "p4_i": 0.0,
         "p5": 15.56, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.78, "p6_i": 1.5, "p6_i2": 0.0,
@@ -556,7 +634,7 @@ PRESETS = {
     },
     "DK Pick6 MLB Promo": {
         "p2": 3.0,
-        "p3": 6.64,
+        "p3": 6.64, "p3_i": 0.0,
         "p4": 10.64, "p4_i": 0.0,
         "p5": 12.77, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 26.78, "p6_i": 1.5, "p6_i2": 0.0,
@@ -566,7 +644,7 @@ PRESETS = {
     },
     "DK Pick6 Soccer": {
         "p2": 3.6,
-        "p3": 6.66,
+        "p3": 6.66, "p3_i": 0.0,
         "p4": 12.56, "p4_i": 0.0,
         "p5": 19.4, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 31.2, "p6_i": 1.5, "p6_i2": 0.0,
@@ -577,7 +655,7 @@ PRESETS = {
     },
     "DK Pick6 Soccer Promo": {
         "p2": 3,
-        "p3": 6.6,
+        "p3": 6.6, "p3_i": 0.0,
         "p4": 12.11, "p4_i": 0.0,
         "p5": 15.07, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 31.2, "p6_i": 1.5, "p6_i2": 0.0,
@@ -588,7 +666,7 @@ PRESETS = {
     },
     "DK Pick6 CS2": {
         "p2": 3.1,
-        "p3": 5.27,
+        "p3": 5.27, "p3_i": 0.0,
         "p4": 8.16, "p4_i": 0.0,
         "p5": 14.94, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 20.29, "p6_i": 1.5, "p6_i2": 0.0,
@@ -599,7 +677,7 @@ PRESETS = {
     },
     "DK Pick6 CS2 Promo": {
         "p2": 2.5,
-        "p3": 4.94,
+        "p3": 4.94, "p3_i": 0.0,
         "p4": 7.90, "p4_i": 0.0,
         "p5": 0.00, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 0.00, "p6_i": 0.0, "p6_i2": 0.0,
@@ -609,7 +687,7 @@ PRESETS = {
     },
     "DK Pick6 Valorant": {
         "p2": 3.51,
-        "p3": 8.98,
+        "p3": 8.98, "p3_i": 0.0,
         "p4": 10.47, "p4_i": 0.0,
         "p5": 0, "p5_i": 0, "p5_i2": 0.0,
         "p6": 0, "p6_i": 0, "p6_i2": 0.0,
@@ -619,7 +697,7 @@ PRESETS = {
     },
     "DK Pick6 COD": {
         "p2": 3.31,
-        "p3": 6.14,
+        "p3": 6.14, "p3_i": 0.0,
         "p4": 9.09, "p4_i": 0.0,
         "p5": 0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 0, "p6_i": 0, "p6_i2": 0.0,
@@ -629,7 +707,7 @@ PRESETS = {
     },
     "DK Pick6 LOL": {
         "p2": 3.77,
-        "p3": 6.91,
+        "p3": 6.91, "p3_i": 0.0,
         "p4": 10.94, "p4_i": 0.0,
         "p5": 15.9, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 20.32, "p6_i": 1.5, "p6_i2": 0.0,
@@ -640,7 +718,7 @@ PRESETS = {
     },
     "DK Pick6 NFL": {
         "p2": 3.38,
-        "p3": 6.64,
+        "p3": 6.64, "p3_i": 0.0,
         "p4": 11.74, "p4_i": 0.0,
         "p5": 18.26, "p5_i": 1.0, "p5_i2": 0.0,
         "p6": 35.72, "p6_i": 1.5, "p6_i2": 0.0,
@@ -650,7 +728,7 @@ PRESETS = {
     },
     "Prizepicks": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 6.0, "p4_i": 1.5,
         "p5": 10.0, "p5_i": 2.0, "p5_i2": 0.4,
         "p6": 25.0, "p6_i": 2.0, "p6_i2": 0.4,
@@ -659,7 +737,7 @@ PRESETS = {
     },
     "RTSports (Mulligan)": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 12.0, "p5_i": 2.0, "p5_i2": 0.0,
         "p6": 25.0, "p6_i": 2.5, "p6_i2": 0.0,
@@ -668,7 +746,7 @@ PRESETS = {
     },
     "RTSports (Power)": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 12.0, "p5_i": 2.0, "p5_i2": 0.0,
         "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0,
@@ -677,7 +755,7 @@ PRESETS = {
     },
     "Drafters": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 4.0, "p4_i": 2.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 10.0, "p6_i": 2.5, "p6_i2": 1.5,
@@ -686,23 +764,92 @@ PRESETS = {
     },
     "Drafters (Power Only)": {
         "p2": 3.0,
-        "p3": 6.0,
+        "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
         "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0,
         "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 100.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
+    # Underdog offers a Power (all-or-nothing) and a Flex (partial-win) ladder
+    # at each slip size. This preset takes whichever needs the lower breakeven
+    # win rate per leg, assuming equal legs:
+    #   2 legs  Power 3.5x           53.45%   (no Flex ladder offered)
+    #   3 legs  Power 6.5x           53.58%   vs Flex 3.25/1.09     55.39%
+    #   4 legs  Flex 7.2/1.4         53.70%   vs Power 12x          53.73%
+    #   5 legs  Flex 10/2.5          54.75%   vs Power 20x          54.93%
+    #   6 legs  Flex 25/2.6/0.25     53.82%   vs Power 35x          55.29%
+    # Note the 4 and 5-leg margins are thin and reverse on EV once the legs
+    # clear ~53.9% / ~55.6%, where the Power ladder pays more.
     "Underdog Fantasy": {
         "p2": 3.5,
-        "p3": 6.5,
-        "p4": 7.2, "p4_i": 1.8,
-        "p5": 0.0, "p5_i": 0.0, "p5_i2": 0.0,
-        "p6": 0.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p3": 6.5, "p3_i": 0.0,
+        "p4": 7.2, "p4_i": 1.4,
+        "p5": 10.0, "p5_i": 2.5, "p5_i2": 0.0,
+        "p6": 25.0, "p6_i": 2.6, "p6_i2": 0.25,
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
 }
+
+# --- VARIANT PAYOUT LADDERS ---
+# Some sites publish more than one payout ladder for the same slip size and
+# let you choose per entry. Each variant maps slip size -> {wins: multiplier};
+# a slip size a variant does not offer is simply absent (Underdog has no
+# 2-leg Flex ladder). Which ladder is best depends on the whole betting
+# situation -- leg odds, boosts, stake caps, refunds -- so the choice is made
+# per slip size at calculate time by expected growth, not fixed here.
+PRESET_VARIANTS = {
+    "Underdog Fantasy": {
+        "Power": {
+            2: {2: 3.5},
+            3: {3: 6.5},
+            4: {4: 12.0},
+            5: {5: 20.0},
+            6: {6: 35.0},
+        },
+        "Flex": {
+            3: {3: 3.25, 2: 1.09},
+            4: {4: 7.2, 3: 1.4},
+            5: {5: 10.0, 4: 2.5},
+            6: {6: 25.0, 5: 2.6, 4: 0.25},
+        },
+    },
+}
+
+# Selector value meaning "compare every ladder and keep the best".
+LADDER_AUTO = "Auto — highest EG"
+
+# Payout-box keys per slip size, highest tier first: (n_legs, [(wins, key)]).
+_LADDER_BOX_KEYS = {
+    2: [(2, "p2")],
+    3: [(3, "p3"), (2, "p3_i")],
+    4: [(4, "p4"), (3, "p4_i")],
+    5: [(5, "p5"), (4, "p5_i"), (3, "p5_i2")],
+    6: [(6, "p6"), (5, "p6_i"), (4, "p6_i2")],
+    7: [(7, "p7"), (6, "p7_i"), (5, "p7_i2")],
+    8: [(8, "p8"), (7, "p8_i"), (6, "p8_i2")],
+}
+
+
+def ladder_to_boxes(ladder):
+    """Flatten a variant ladder into the payout-input values it corresponds to."""
+    boxes = {}
+    for n, keys in _LADDER_BOX_KEYS.items():
+        tiers = ladder.get(n, {})
+        for wins, key in keys:
+            boxes[key] = float(tiers.get(wins, 0.0))
+    return boxes
+
+
+def scaled_tiers(tiers, scale):
+    """Scale a ladder's tiers, dropping any that do not pay.
+
+    A tier present at 0.0 counts as a win paying nothing, which forfeits the
+    complete-loss refund -- so an unpaid tier must be absent, not zero.
+    """
+    return {wins: mult * scale for wins, mult in tiers.items() if mult > 0}
+
 
 # Leg-multiplier input format per preset. Presets not listed use the standard
 # 1.0x scale; "underdog" presets take leg prices as Underdog displays them.
@@ -877,6 +1024,8 @@ if selected_preset != _prev_preset:
         st.session_state["boost_on_gross"] = True
         st.session_state["use_std_leg_mults"] = True
         _cv_set("leg_mult_format", _PRESET_LEG_MULT_FORMATS.get(selected_preset, "standard"))
+        _cv_set("ladder_choice", LADDER_AUTO)
+        st.session_state["_prev_ladder_choice"] = LADDER_AUTO
         st.session_state["use_tiered_stakes"] = False
         st.session_state["max_stake_small"] = 0.0
         st.session_state["max_stake_large"] = 0.0
@@ -1110,10 +1259,45 @@ if not use_std_leg_mults:
 # --- MAIN PAGE ---
 
 st.header("1. Payout Structure (Base Multipliers)")
+
+# A preset with several published ladders is compared per slip size instead of
+# being pinned to one. Rendered before the payout boxes so picking a specific
+# ladder can fill them on this same run.
+_variants = PRESET_VARIANTS.get(selected_preset)
+_ladder_choice = LADDER_AUTO
+if _variants:
+    _options = [LADDER_AUTO] + list(_variants.keys())
+    _ladder_choice = _cv_selectbox(
+        st, "Payout ladder", "ladder_choice", _options, LADDER_AUTO,
+        help="Auto prices every ladder this site offers for each slip size under "
+             "your current odds, boosts and stake caps, and keeps the one with the "
+             "highest expected growth. Picking a ladder by name loads it into the "
+             "boxes below instead, where you can edit it."
+    )
+    # Loading a named ladder writes it into the payout boxes once, so it stays
+    # editable afterwards rather than being overwritten on every rerun.
+    if _ladder_choice != st.session_state.get("_prev_ladder_choice"):
+        st.session_state["_prev_ladder_choice"] = _ladder_choice
+        if _ladder_choice != LADDER_AUTO:
+            for _key, _val in ladder_to_boxes(_variants[_ladder_choice]).items():
+                st.session_state[_key] = _val
+    if _ladder_choice == LADDER_AUTO:
+        _covered = sorted({n for lad in _variants.values() for n in lad})
+        st.caption(
+            f"Auto: comparing {' and '.join(_variants)} by expected growth for "
+            f"{', '.join(f'{n}-pick' for n in _covered)}. The boxes below are used "
+            "only for slip sizes those ladders do not cover."
+        )
+
 # Row 1: 2, 3, 4 picks
 c1, c2, c3 = st.columns(3)
 p2 = c1.number_input("2-Pick Win", value=st.session_state.get("p2", 3.0), key="p2")
-p3 = c2.number_input("3-Pick Win", value=st.session_state.get("p3", 6.0), key="p3")
+
+with c2:
+    st.markdown("**3-Pick**")
+    col_a, col_b = st.columns(2)
+    p3 = col_a.number_input("3/3", value=st.session_state.get("p3", 6.0), key="p3")
+    p3_i = col_b.number_input("2/3", value=st.session_state.get("p3_i", 0.0), key="p3_i")
 
 with c3:
     st.markdown("**4-Pick**")
@@ -1232,106 +1416,84 @@ if st.button("Calculate EV & Stakes", type="primary"):
     # The slip-scale s applies to floors and averages alike, so the overage
     # scales proportionally with the displayed slip multiplier.
     s = payout_scale
+    # scaled_tiers drops any tier that does not pay. A tier keyed at 0.0 counts
+    # as a win paying nothing, which is not the same as a complete loss: under
+    # "Refund on Loss" with partial refunds off, the zero-keyed tier forfeits
+    # the refund a loss would collect. Unused tiers must be absent, not zero.
     slip_configs = [
-        (2, {2: p2 * s}, {2: f2 * s}),
-        (3, {3: p3 * s}, {3: f3 * s}),
-        (4, {4: p4 * s, 3: p4_i * s}, {4: f4 * s, 3: p4_i * s}),
-        (5, {5: p5 * s, 4: p5_i * s, 3: p5_i2 * s}, {5: f5 * s, 4: p5_i * s, 3: p5_i2 * s}),
-        (6, {6: p6 * s, 5: p6_i * s, 4: p6_i2 * s}, {6: f6 * s, 5: p6_i * s, 4: p6_i2 * s}),
+        # (N, avg payouts, guaranteed floors)
+        (2, scaled_tiers({2: p2}, s), scaled_tiers({2: f2}, s)),
+        (3, scaled_tiers({3: p3, 2: p3_i}, s), scaled_tiers({3: f3, 2: p3_i}, s)),
+        (4, scaled_tiers({4: p4, 3: p4_i}, s), scaled_tiers({4: f4, 3: p4_i}, s)),
+        (5, scaled_tiers({5: p5, 4: p5_i, 3: p5_i2}, s),
+            scaled_tiers({5: f5, 4: p5_i, 3: p5_i2}, s)),
+        (6, scaled_tiers({6: p6, 5: p6_i, 4: p6_i2}, s),
+            scaled_tiers({6: f6, 5: p6_i, 4: p6_i2}, s)),
     ]
     if show_78:
-        slip_configs.append((7, {7: p7 * s, 6: p7_i * s, 5: p7_i2 * s},
-                                {7: f7 * s, 6: p7_i * s, 5: p7_i2 * s}))
-        slip_configs.append((8, {8: p8 * s, 7: p8_i * s, 6: p8_i2 * s},
-                                {8: f8 * s, 7: p8_i * s, 6: p8_i2 * s}))
+        slip_configs.append((7, scaled_tiers({7: p7, 6: p7_i, 5: p7_i2}, s),
+                                scaled_tiers({7: f7, 6: p7_i, 5: p7_i2}, s)))
+        slip_configs.append((8, scaled_tiers({8: p8, 7: p8_i, 6: p8_i2}, s),
+                                scaled_tiers({8: f8, 7: p8_i, 6: p8_i2}, s)))
+
+    # Every ladder for a given slip size is priced under the same circumstances.
+    cfg = {
+        "boost_mult": boost_mult,
+        "boost_on_gross": boost_on_gross,
+        "max_boost_dollars": max_boost_dollars,
+        "sweat_free_fraction": sweat_free_fraction,
+        "stake_back_on_win": stake_back_on_win,
+        "refund_partial_wins": refund_partial_wins,
+        "bankroll": bankroll,
+        "kelly_fraction": kelly_fraction,
+        "use_tiered_stakes": use_tiered_stakes,
+        "max_stake_small": max_stake_small,
+        "max_stake_large": max_stake_large,
+        "max_stake_input": max_stake_input,
+    }
+    _comparing = bool(_variants) and _ladder_choice == LADDER_AUTO
+    _box_label = _ladder_choice if (_variants and not _comparing) else "Payout boxes"
 
     for n, avg_structure, floor_structure in slip_configs:
-        current_probs = probs[:n]
-        current_leg_mults = leg_mults[:n]
+        # The chalk adjustment depends on the legs, not the ladder, so every
+        # candidate for this slip size is priced under the same factor.
+        chalk = chalk_overage_factor(probs[:n], leg_mults[:n], beta=chalk_beta)
 
-        tier_comps = build_tier_components(
-            avg_structure, floor_structure, n,
-            estimate_lower_tier_overage=est_lower_overage)
-        chalk = chalk_overage_factor(current_probs, current_leg_mults, beta=chalk_beta)
-        has_overage = any(ov > 0 for (_fl, ov) in tier_comps.values())
+        # Compare the site's published ladders for this slip size; fall back to
+        # the payout boxes for sizes no ladder covers (and when not comparing).
+        # A variant ladder is a fixed published payout, so its floor equals its
+        # payout and it carries no overage; the boxes hold averages and floors
+        # separately.
+        candidates = []
+        if _comparing:
+            for _name, _ladder in _variants.items():
+                if n in _ladder:
+                    _tiers = scaled_tiers(_ladder[n], s)
+                    candidates.append((_name, _tiers, _tiers))
+        if not candidates:
+            candidates = [(_box_label, avg_structure, floor_structure)]
 
-        def _outcomes(cap_amount, cap_stake):
-            return calculate_complex_outcomes(
-                current_probs,
-                current_leg_mults,
-                tier_comps,
-                boost_mult,
-                max_boost_amount=cap_amount,
-                stake=cap_stake,
-                boost_on_gross=boost_on_gross,
-                sweat_free_fraction=sweat_free_fraction,
-                stake_back_on_win=stake_back_on_win,
-                refund_partial_wins=refund_partial_wins,
-                chalk_factor=chalk,
-            )
+        priced = []
+        for _name, _avg, _floor in candidates:
+            _comps = build_tier_components(
+                _avg, _floor, n, estimate_lower_tier_overage=est_lower_overage)
+            priced.append(
+                (_name, evaluate_slip(n, _comps, probs, leg_mults, cfg, chalk_factor=chalk)))
 
-        _cap = (max_stake_small if n <= 3 else max_stake_large) if use_tiered_stakes else max_stake_input
+        # Expected growth decides. EV breaks ties, which matters when no stake
+        # is warranted at all: growth is 0 for every ladder at a zero stake.
+        best_name, best = max(priced, key=lambda kv: (kv[1]["EG"], kv[1]["EV"]))
 
-        def _stake_from(outc):
-            f = solve_general_kelly(outc)
-            stk = bankroll * f * kelly_fraction
-            return min(stk, _cap) if _cap > 0 else stk
-
-        # First pass: no boost cap (cap depends on stake, stake on outcomes)
-        outcomes = _outcomes(0.0, 1.0)
-        used_stake = _stake_from(outcomes)
-
-        # With a boost cap, iterate outcomes<->stake to a fixed point: the cap
-        # per dollar depends on the stake, and the Kelly stake depends on the
-        # capped outcomes. Converges in a couple of iterations.
-        if max_boost_dollars > 0 and used_stake > 0:
-            for _ in range(8):
-                outcomes = _outcomes(max_boost_dollars, used_stake)
-                new_stake = _stake_from(outcomes)
-                if abs(new_stake - used_stake) < 0.01:
-                    used_stake = new_stake
-                    break
-                used_stake = new_stake
-            if used_stake > 0:
-                outcomes = _outcomes(max_boost_dollars, used_stake)
-            else:
-                outcomes = _outcomes(0.0, 1.0)
-
-        # Calculate Stats from (potentially capped) outcomes
-        ev_decimal = sum(p * n_out for p, n_out in outcomes)
-
-        # Win Prob (Probability of winning ANY money, i.e. net_outcome > -1)
-        win_prob_any = sum(p for p, n_out in outcomes if n_out > -1.0)
-
-        used_fraction = used_stake / bankroll if bankroll > 0 else 0
-        eg_bps = calculate_expected_growth(outcomes, used_fraction)
-
-        # Compute payout details per win tier for display
-        leg_mult_product = 1.0
-        for m in current_leg_mults:
-            leg_mult_product *= m
-        payout_details = compute_payout_details(
-            tier_comps, n, boost_mult, boost_on_gross,
-            max_boost_dollars, used_stake, leg_mult_product,
-            chalk_factor=chalk,
-            sweat_free_fraction=sweat_free_fraction,
-            stake_back_on_win=stake_back_on_win,
-            refund_partial_wins=refund_partial_wins
-        )
-
-        results.append({
-            "Size": f"{n}-Pick",
-            "EV": ev_decimal,
-            "Any Win %": win_prob_any,
-            "Stake": used_stake,
-            "EG": eg_bps,
-            "Details": payout_details,
-            "Chalk": chalk,
-            "HasOverage": has_overage,
-        })
+        result = dict(best)
+        result["Size"] = f"{n}-Pick"
+        result["Ladder"] = best_name
+        result["Priced"] = priced
+        result["Chalk"] = chalk
+        results.append(result)
 
     # --- DISPLAY RESULTS ---
-    any_overage = any(r['HasOverage'] for r in results)
+    _any_compared = any(len(res['Priced']) > 1 for res in results)
+    any_overage = any(res['HasOverage'] for res in results)
 
     if use_tiered_stakes and (max_stake_small > 0 or max_stake_large > 0):
         _large_label = "4-8 picks" if show_78 else "4-6 picks"
@@ -1363,7 +1525,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
             label=res['Size'],
             value=f"{res['EV']*100:.1f}% EV",
             delta=f"{res['EG']:.1f} bps",
-            help=f"Stake: ${res['Stake']:.2f}"
+            help=(f"Stake: ${res['Stake']:.2f}" +
+                  (f" | Ladder: {res['Ladder']}" if _any_compared else ""))
         )
 
     # Detailed Summary Table
@@ -1372,11 +1535,15 @@ if st.button("Calculate EV & Stakes", type="primary"):
         top_detail = res['Details'][0] if res['Details'] else None
         row = {
             "Slip Size": res['Size'],
+        }
+        if _any_compared:
+            row["Ladder"] = res['Ladder']
+        row.update({
             "EV %": f"{res['EV']*100:.2f}%",
             "Exp. Growth (bps)": f"{res['EG']:.2f}",
             "Rec. Stake": f"${res['Stake']:.2f}",
             "Hit Rate (Any Prize)": f"{res['Any Win %']*100:.1f}%",
-        }
+        })
         if any_overage:
             row["Chalk ×"] = f"{res['Chalk']:.2f}" if res['HasOverage'] else "—"
         if top_detail and res['Stake'] > 0:
@@ -1384,6 +1551,32 @@ if st.button("Calculate EV & Stakes", type="primary"):
             row["Top Profit"] = f"${top_detail['profit_dollars']:.2f}"
         table_data.append(row)
     st.table(table_data)
+
+    # Ladder Comparison -- every ladder priced, not just the winner
+    if _any_compared:
+        st.subheader("Ladder Comparison (by Expected Growth)")
+        st.caption(
+            "Each ladder priced under the same odds, boosts, refunds and stake caps. "
+            "The chosen one has the highest expected growth, which already accounts "
+            "for the stake Kelly sizes it at — so it need not be the highest EV."
+        )
+        comparison_data = []
+        for res in results:
+            if len(res['Priced']) < 2:
+                continue
+            for name, stats in sorted(res['Priced'], key=lambda kv: -kv[1]['EG']):
+                top = stats['Details'][0] if stats['Details'] else None
+                comparison_data.append({
+                    "Slip": res['Size'],
+                    "Ladder": name,
+                    "Chosen": "✓" if name == res['Ladder'] else "",
+                    "Exp. Growth (bps)": f"{stats['EG']:.2f}",
+                    "EV %": f"{stats['EV']*100:.2f}%",
+                    "Rec. Stake": f"${stats['Stake']:.2f}",
+                    "Top Payout": f"{top['avg_mult']:.2f}x" if top else "—",
+                    "Hit Rate (Any Prize)": f"{stats['Any Win %']*100:.1f}%",
+                })
+        st.table(comparison_data)
 
     # Payout Breakdown
     has_boost = boost_mult != 1.0
@@ -1410,9 +1603,13 @@ if st.button("Calculate EV & Stakes", type="primary"):
             for detail in res['Details']:
                 row = {
                     "Slip": res['Size'],
+                }
+                if _any_compared:
+                    row["Ladder"] = res['Ladder']
+                row.update({
                     "Tier": detail['tier'],
                     "Floor": f"{detail['base_mult']:.2f}x",
-                }
+                })
                 if any_overage:
                     row["Overage (est.)"] = f"{detail['overage_mult']:.2f}x"
                     row["Avg Total"] = f"{detail['avg_mult']:.2f}x"
