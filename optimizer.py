@@ -67,6 +67,60 @@ def leg_mult_to_underdog_price(mult, base=UNDERDOG_BASE_PRICE, shift=UNDERDOG_PR
     return float(shift) + (float(base) - float(shift)) * mult
 
 
+# --- SPLASH SPORTS LEG FORMAT ---
+# Splash Sports shows each leg as a percentage, where 50% is an unmodified
+# leg. A leg's factor is 0.5 / p and the slip pays base x product of factors,
+# rounded to two decimals (all-or-nothing, no partial payouts). Base payouts:
+# 2 = 3x, 3 = 5x, 4 = 10x, 5 = 20x, 6 = 35x. Verified against 13 observed
+# 3-pick slips, e.g.
+#   50/50/55 -> 5 * 0.5/0.55             = 4.55x
+#   50/50/45 -> 5 * 0.5/0.45             = 5.56x
+#   50/55/45 -> 5 * 0.5/0.55 * 0.5/0.45  = 5.05x
+#   50/45/45 -> 5 * (0.5/0.45)^2         = 6.17x
+# The factor simply swaps in the leg's implied odds, so Splash's hold is
+# fixed by slip size (3/4, 5/8, 10/16, 20/32, 35/64 of fair) and a slip's EV
+# is hold * product(q/p) - 1, where q is your true probability.
+SPLASH_BASE_PCT = 50.0   # displayed % of an unmodified (1.0x) leg
+
+
+def splash_pct_to_leg_mult(pct, base=SPLASH_BASE_PCT):
+    """Convert a Splash leg % (e.g. 55 or 0.55) to a 1.0x-scale multiplier."""
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        return 1.0
+    if 0 < pct <= 1:          # accept 0.55 as well as 55
+        pct *= 100.0
+    return float(base) / pct if pct > 0 else 1.0
+
+
+SPLASH_SIDES = ["Auto", "Over", "Under"]
+
+
+def splash_side_ratios(q_over, over_pct, under_pct=None):
+    """Edge ratio (true prob / Splash %) for both sides of a Splash leg.
+
+    q_over is your probability for the Over side; the Under side uses 1 - q_over.
+    under_pct defaults to 100 - over_pct when left blank. Returns
+    (over_ratio, under_ratio, under_pct_used); a ratio is 0.0 when its % is unusable.
+    """
+    try:
+        over_pct = float(over_pct)
+    except (TypeError, ValueError):
+        over_pct = SPLASH_BASE_PCT
+    if 0 < over_pct <= 1:
+        over_pct *= 100.0
+    if under_pct is None:
+        under_pct = 100.0 - over_pct
+    else:
+        under_pct = float(under_pct)
+        if 0 < under_pct <= 1:
+            under_pct *= 100.0
+    over_ratio = q_over / (over_pct / 100.0) if over_pct > 0 else 0.0
+    under_ratio = (1.0 - q_over) / (under_pct / 100.0) if under_pct > 0 else 0.0
+    return over_ratio, under_ratio, under_pct
+
+
 def solve_general_kelly(outcomes):
     """
     Solves for optimal Kelly fraction 'f' given a list of (probability, net_odds) tuples.
@@ -473,6 +527,15 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
 # --- PRESETS DATA ---
 PRESETS = {
     "Custom": None,
+    "Splash": {
+        "p2": 3.0,
+        "p3": 5.0, "p3_i": 0.0,
+        "p4": 10.0, "p4_i": 0.0,
+        "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
+        "p6": 35.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
     "Betr Nukes": {
         "p2": 6.0,
         "p3": 10.0, "p3_i": 0.0,
@@ -865,6 +928,12 @@ def scaled_tiers(tiers, scale):
 # 1.0x scale; "underdog" presets take leg prices as Underdog displays them.
 _PRESET_LEG_MULT_FORMATS = {
     "Underdog Fantasy": "underdog",
+    "Splash": "splash",
+}
+
+# Other settings a preset forces on load (applied after the generic reset).
+_PRESET_SETTINGS = {
+    "Splash": {"boost_on_gross": True},
 }
 
 # Max stake defaults per preset (0 means no cap)
@@ -875,6 +944,7 @@ _PRESET_MAX_STAKES = {
     "Drafters": 10.0,
     "Drafters (Power Only)": 10.0,
     "Underdog Fantasy": 25.0,
+    "Splash": 5.0,
 }
 
 # --- PROMO PRESETS DATA ---
@@ -1000,6 +1070,21 @@ def _cv_number_input(container, label, name, default, minimum=None, **kwargs):
     return val
 
 
+def _cv_optional_number_input(container, label, name, **kwargs):
+    """Like _cv_number_input, but the box may be left blank (returns None)."""
+    wkey = _cv_key(name)
+    if wkey not in st.session_state:
+        st.session_state[wkey] = _cv_get(name, None)
+    cur = st.session_state[wkey]
+    if cur is not None and (not isinstance(cur, (int, float)) or isinstance(cur, bool)):
+        _cv_reset(name, None)
+        wkey = _cv_key(name)
+    val = container.number_input(label, key=wkey, **kwargs)
+    val = None if val is None else float(val)
+    st.session_state[f"_cv_{name}"] = val
+    return val
+
+
 def _cv_selectbox(container, label, name, options, default, **kwargs):
     """selectbox whose value survives runs where the widget isn't rendered."""
     wkey = _cv_key(name)
@@ -1040,6 +1125,8 @@ if selected_preset != _prev_preset:
         st.session_state["max_stake_small"] = 0.0
         st.session_state["max_stake_large"] = 0.0
         st.session_state["max_stake_input"] = _PRESET_MAX_STAKES.get(selected_preset, 0.0)
+        for _key, _val in _PRESET_SETTINGS.get(selected_preset, {}).items():
+            st.session_state[_key] = _val
         # Load payout multipliers
         for _key, _val in PRESETS[selected_preset].items():
             st.session_state[_key] = _val
@@ -1189,30 +1276,43 @@ if not (isinstance(_ud_base, (int, float)) and isinstance(_ud_shift, (int, float
         and _ud_base - _ud_shift > 0):
     _ud_base, _ud_shift = UNDERDOG_BASE_PRICE, UNDERDOG_PRICE_SHIFT
 _ud_format = _leg_format == "underdog"
+_splash_format = _leg_format == "splash"
 
 use_std_leg_mults = st.sidebar.checkbox(
-    f"All legs at standard price ({_ud_base:.2f}x)?" if _ud_format else "All leg multipliers 1.0x?",
+    f"All legs at {SPLASH_BASE_PCT:.0f}%?" if _splash_format
+    else f"All legs at standard price ({_ud_base:.2f}x)?" if _ud_format
+    else "All leg multipliers 1.0x?",
     key="use_std_leg_mults",
     help="Underdog prices every leg, so an unmodified leg still shows a multiplier "
          f"({_ud_base:.2f}x). Check this when no leg is boosted or discounted."
-         if _ud_format else None
+         if _ud_format
+         else "Splash shows each leg as a %, and 50% is unmodified. Uncheck to enter "
+              "the % shown for each leg; a leg pays 0.5 / p times the base."
+         if _splash_format else None
 )
 
 _show_78_sidebar = st.session_state.get("show_78", False)
 _n_leg_inputs = 8 if _show_78_sidebar else 6
 leg_mults = [1.0] * 8
-leg_inputs = [_ud_base if _ud_format else 1.0] * 8
+leg_inputs = [_ud_base if _ud_format else SPLASH_BASE_PCT if _splash_format else 1.0] * 8
+splash_over_pcts = [SPLASH_BASE_PCT] * 8
+splash_under_pcts = [None] * 8   # None = 100 - Over
 
 if not use_std_leg_mults:
     _leg_format = _cv_selectbox(
         st.sidebar, "Leg multiplier format", "leg_mult_format",
-        ["standard", "underdog"], "standard",
-        format_func=lambda v: "Standard (1.0x = unmodified)" if v == "standard"
-                              else f"Underdog leg price ({_ud_base:.2f}x = unmodified)",
-        help="Underdog Fantasy shows each leg's price instead of a 1.0x-scale modifier. "
-             "Picking that format lets you type the prices straight off the slip."
+        ["standard", "underdog", "splash"], "standard",
+        format_func=lambda v: {
+            "standard": "Standard (1.0x = unmodified)",
+            "underdog": f"Underdog leg price ({_ud_base:.2f}x = unmodified)",
+            "splash": f"Splash leg % ({SPLASH_BASE_PCT:.0f}% = unmodified)",
+        }[v],
+        help="Underdog Fantasy shows each leg's price and Splash shows each leg's % "
+             "instead of a 1.0x-scale modifier. Picking those formats lets you type "
+             "the values straight off the slip."
     )
     _ud_format = _leg_format == "underdog"
+    _splash_format = _leg_format == "splash"
 
     if _ud_format:
         with st.sidebar.expander("Leg price scale"):
@@ -1244,8 +1344,15 @@ if not use_std_leg_mults:
                 )
                 _ud_base, _ud_shift = UNDERDOG_BASE_PRICE, UNDERDOG_PRICE_SHIFT
 
-    st.sidebar.subheader("Individual Leg Prices" if _ud_format else "Individual Leg Multipliers")
-    lm_cols = st.sidebar.columns(3)
+    st.sidebar.subheader("Individual Leg Prices" if _ud_format
+                         else "Individual Leg %" if _splash_format
+                         else "Individual Leg Multipliers")
+    if _splash_format:
+        st.sidebar.caption(
+            "Enter the % Splash shows for each side. Leave Under blank to use "
+            "100 − Over. Which side gets bet is chosen under Play Odds."
+        )
+    lm_cols = st.sidebar.columns(3) if not _splash_format else None
     for i in range(_n_leg_inputs):
         if _ud_format:
             leg_inputs[i] = _cv_number_input(
@@ -1253,6 +1360,19 @@ if not use_std_leg_mults:
                 minimum=0.0, step=0.01, format="%.2f"
             )
             leg_mults[i] = underdog_price_to_leg_mult(leg_inputs[i], _ud_base, _ud_shift)
+        elif _splash_format:
+            _oc, _uc = st.sidebar.columns(2)
+            splash_over_pcts[i] = _cv_number_input(
+                _oc, f"Leg {i+1} Over %", f"splash_leg_pct_{i}", SPLASH_BASE_PCT,
+                minimum=1.0, max_value=99.0, step=1.0, format="%.1f"
+            )
+            splash_under_pcts[i] = _cv_optional_number_input(
+                _uc, f"Leg {i+1} Under %", f"splash_under_pct_{i}",
+                min_value=1.0, max_value=99.0, step=1.0, format="%.1f",
+                placeholder=f"{100 - splash_over_pcts[i]:.1f}"
+            )
+            leg_inputs[i] = splash_over_pcts[i]
+            leg_mults[i] = splash_pct_to_leg_mult(leg_inputs[i])
         else:
             leg_mults[i] = _cv_number_input(
                 lm_cols[i % 3], f"Leg {i+1} x", f"leg_mult_{i}", 1.0,
@@ -1381,16 +1501,64 @@ st.header("2. Play Odds (Win Probability)")
 _n_odds = 8 if show_78 else 6
 odds_cols = st.columns(_n_odds)
 probs = []
+_side_rows = []
 for i, col in enumerate(odds_cols):
     val = col.text_input(f"Leg {i+1} Odds", value="-110", key=f"l{i}")
     prob = american_to_prob(val)
     probs.append(prob)
     if not use_std_leg_mults and _ud_format:
         col.caption(f"{prob*100:.1f}% | {leg_inputs[i]:.2f}x → x{leg_mults[i]:.3f}")
+    elif not use_std_leg_mults and _splash_format:
+        _r_over, _r_under, _u_pct = splash_side_ratios(
+            prob, splash_over_pcts[i], splash_under_pcts[i])
+        _best = "Over" if _r_over >= _r_under else "Under"
+        _side = _cv_selectbox(
+            col, f"Leg {i+1} side", f"splash_side_{i}", SPLASH_SIDES, "Auto",
+            help="Odds above are your probability for the Over. Auto bets whichever "
+                 "side has the higher q/p (your % ÷ Splash's %); Under uses 1 − your Over %."
+        )
+        _bet = _best if _side == "Auto" else _side
+        if _bet == "Under":
+            probs[i] = 1.0 - prob
+            leg_mults[i] = splash_pct_to_leg_mult(_u_pct)
+        else:
+            leg_mults[i] = splash_pct_to_leg_mult(splash_over_pcts[i])
+        _mark = lambda s: "✓" if s == _best else ""
+        col.caption(
+            f"O {splash_over_pcts[i]:.0f}%: q/p {_r_over:.3f}{_mark('Over')}  \n"
+            f"U {_u_pct:.0f}%: q/p {_r_under:.3f}{_mark('Under')}  \n"
+            f"**Betting {_bet.upper()}** → {probs[i]*100:.1f}%, x{leg_mults[i]:.3f}"
+        )
+        _side_rows.append({
+            "Leg": i + 1,
+            "Over %": splash_over_pcts[i], "Under %": _u_pct,
+            "Your Over %": prob * 100, "Your Under %": (1 - prob) * 100,
+            "Over q/p": _r_over, "Under q/p": _r_under,
+            "Better side": _best, "Betting": _bet,
+        })
     elif not use_std_leg_mults:
         col.caption(f"{prob*100:.1f}% | x{leg_mults[i]}")
     else:
         col.caption(f"{prob*100:.1f}%")
+
+if _side_rows:
+    with st.expander("Splash side check — which side has the better odds ratio", expanded=True):
+        st.caption(
+            "q/p = your probability ÷ Splash's %. Bet the side with the higher ratio; "
+            "a slip is +EV when the product of its ratios beats 1 ÷ hold "
+            "(1.33 for 2-pick, 1.60 for 3–5-pick, 1.83 for 6-pick)."
+        )
+        st.dataframe(
+            _side_rows, hide_index=True,
+            column_config={
+                "Over %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Under %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Your Over %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Your Under %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Over q/p": st.column_config.NumberColumn(format="%.3f"),
+                "Under q/p": st.column_config.NumberColumn(format="%.3f"),
+            },
+        )
 
 st.markdown("---")
 sc1, sc2, _ = st.columns([1, 1, 2])
@@ -1596,7 +1764,9 @@ if st.button("Calculate EV & Stakes", type="primary"):
     if has_any_details:
         st.subheader("Payout Breakdown (Winning Tiers)")
         if not use_std_leg_mults:
-            _std_leg_label = f"standard ({_ud_base:.2f}x) leg prices" if _ud_format else "standard (1.0x) leg multipliers"
+            _std_leg_label = (f"standard ({_ud_base:.2f}x) leg prices" if _ud_format
+                              else f"standard ({SPLASH_BASE_PCT:.0f}%) legs" if _splash_format
+                              else "standard (1.0x) leg multipliers")
             st.caption(f"ℹ️ Payouts shown assume {_std_leg_label}. "
                        "Actual payouts vary based on which specific legs win.")
         if any_overage:
