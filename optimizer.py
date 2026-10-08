@@ -85,7 +85,7 @@ SPLASH_BASE_PCT = 50.0   # displayed % of an unmodified (1.0x) leg
 # 1.33x. Observed 10/7/26 on 4-pick (10x base) slips with three 50% legs:
 #   45% -> 11.11x, 43% -> 11.63x, 40% -> 12.50x, 39% -> 12.82x  (uncapped)
 #   36% -> 13.30x (raw 13.89x), 44/35/43/40 -> 13.30x (raw 23.60x)
-# and a 3-pick 50/50/36 -> 6.656x (raw 6.944x; cap gives 6.65x).
+# and a 3-pick 50/50/36 -> 6.65x (raw 6.94x), so the cap is slip-wide, not per size.
 # No floor on discounted (>50%) slips has been observed.
 SPLASH_MAX_SLIP_MOD = 1.33
 
