@@ -81,6 +81,13 @@ def leg_mult_to_underdog_price(mult, base=UNDERDOG_BASE_PRICE, shift=UNDERDOG_PR
 # fixed by slip size (3/4, 5/8, 10/16, 20/32, 35/64 of fair) and a slip's EV
 # is hold * product(q/p) - 1, where q is your true probability.
 SPLASH_BASE_PCT = 50.0   # displayed % of an unmodified (1.0x) leg
+# Splash caps the slip's TOTAL leg modifier (product of 0.5/p factors) at
+# 1.33x. Observed 10/7/26 on 4-pick (10x base) slips with three 50% legs:
+#   45% -> 11.11x, 43% -> 11.63x, 40% -> 12.50x, 39% -> 12.82x  (uncapped)
+#   36% -> 13.30x (raw 13.89x), 44/35/43/40 -> 13.30x (raw 23.60x)
+# and a 3-pick 50/50/36 -> 6.656x (raw 6.944x; cap gives 6.65x).
+# No floor on discounted (>50%) slips has been observed.
+SPLASH_MAX_SLIP_MOD = 1.33
 
 
 def splash_pct_to_leg_mult(pct, base=SPLASH_BASE_PCT):
@@ -287,7 +294,8 @@ def build_tier_components(payout_structure, floor_structure, n_legs,
 def calculate_complex_outcomes(probs, leg_multipliers, tier_components, global_boost,
                                max_boost_amount=0.0, stake=1.0, boost_on_gross=True,
                                sweat_free_fraction=0.0, stake_back_on_win=False,
-                               refund_partial_wins=True, chalk_factor=1.0):
+                               refund_partial_wins=True, chalk_factor=1.0,
+                               leg_mult_cap=None):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
 
@@ -335,6 +343,9 @@ def calculate_complex_outcomes(probs, leg_multipliers, tier_components, global_b
                 wins += 1
             else:
                 scenario_prob *= (1 - probs[i])
+
+        if leg_mult_cap is not None and scenario_leg_mult_product > leg_mult_cap:
+            scenario_leg_mult_product = leg_mult_cap
 
         if wins in tier_components:
             floor_mult, overage_mult = tier_components[wins]
@@ -468,6 +479,7 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
             stake_back_on_win=cfg["stake_back_on_win"],
             refund_partial_wins=cfg["refund_partial_wins"],
             chalk_factor=chalk_factor,
+            leg_mult_cap=cfg.get("leg_mult_cap"),
         )
 
     cap = ((cfg["max_stake_small"] if n <= 3 else cfg["max_stake_large"])
@@ -506,6 +518,8 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     leg_mult_product = 1.0
     for m in current_leg_mults:
         leg_mult_product *= m
+    if cfg.get("leg_mult_cap") is not None:
+        leg_mult_product = min(leg_mult_product, cfg["leg_mult_cap"])
     details = compute_payout_details(
         tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
         cfg["max_boost_dollars"], used_stake, leg_mult_product,
@@ -1545,6 +1559,9 @@ if _side_rows:
     with st.expander("Splash side check — which side has the better odds ratio", expanded=True):
         st.caption(
             "q/p = your probability ÷ Splash's %. Bet the side with the higher ratio; "
+            f"Splash caps the slip's combined modifier (product of 0.5/p) at "
+            f"{SPLASH_MAX_SLIP_MOD:.2f}x, so stacking long-shot legs past that adds risk "
+            "with no extra payout. Below the cap, "
             "a slip is +EV when the product of its ratios beats 1 ÷ hold "
             "(1.33 for 2-pick, 1.60 for 3–5-pick, 1.83 for 6-pick)."
         )
@@ -1628,6 +1645,9 @@ if st.button("Calculate EV & Stakes", type="primary"):
         "max_stake_small": max_stake_small,
         "max_stake_large": max_stake_large,
         "max_stake_input": max_stake_input,
+        # Splash caps the slip's combined leg modifier.
+        "leg_mult_cap": (SPLASH_MAX_SLIP_MOD
+                         if (not use_std_leg_mults and _splash_format) else None),
     }
     _comparing = bool(_variants) and _ladder_choice == LADDER_AUTO
     _box_label = _ladder_choice if (_variants and not _comparing) else "Payout boxes"
