@@ -85,9 +85,20 @@ SPLASH_BASE_PCT = 50.0   # displayed % of an unmodified (1.0x) leg
 # 1.33x. Observed 10/7/26 on 4-pick (10x base) slips with three 50% legs:
 #   45% -> 11.11x, 43% -> 11.63x, 40% -> 12.50x, 39% -> 12.82x  (uncapped)
 #   36% -> 13.30x (raw 13.89x), 44/35/43/40 -> 13.30x (raw 23.60x)
-# and a 3-pick 50/50/36 -> 6.65x (raw 6.94x), so the cap is slip-wide, not per size.
+# and a 3-pick 50/50/36 -> 6.65x (raw 6.94x).
+# The cap is per slip SIZE: a 5-pick 50/50/50/40/44 paid 28.41x on 10/28/26
+# (raw 1.4205 modifier, uncapped), so 5-picks are not held to 1.33. Sizes not
+# listed are treated as uncapped until a cap is observed.
 # No floor on discounted (>50%) slips has been observed.
-SPLASH_MAX_SLIP_MOD = 1.33
+SPLASH_MAX_SLIP_MOD = {3: 1.33, 4: 1.33}
+
+
+def splash_slip_cap(n, caps=SPLASH_MAX_SLIP_MOD):
+    """Leg-modifier cap for an n-pick slip (None = uncapped). Accepts a dict
+    keyed by slip size, a single number (applies to all sizes), or None."""
+    if isinstance(caps, dict):
+        return caps.get(n)
+    return caps
 
 
 def splash_pct_to_leg_mult(pct, base=SPLASH_BASE_PCT):
@@ -469,6 +480,7 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     """
     current_probs = probs[:n]
     current_leg_mults = leg_mults[:n]
+    leg_cap = splash_slip_cap(n, cfg.get("leg_mult_cap"))
 
     def outcomes_for(max_boost_amount, stake):
         return calculate_complex_outcomes(
@@ -479,7 +491,7 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
             stake_back_on_win=cfg["stake_back_on_win"],
             refund_partial_wins=cfg["refund_partial_wins"],
             chalk_factor=chalk_factor,
-            leg_mult_cap=cfg.get("leg_mult_cap"),
+            leg_mult_cap=leg_cap,
         )
 
     cap = ((cfg["max_stake_small"] if n <= 3 else cfg["max_stake_large"])
@@ -518,8 +530,8 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     leg_mult_product = 1.0
     for m in current_leg_mults:
         leg_mult_product *= m
-    if cfg.get("leg_mult_cap") is not None:
-        leg_mult_product = min(leg_mult_product, cfg["leg_mult_cap"])
+    if leg_cap is not None:
+        leg_mult_product = min(leg_mult_product, leg_cap)
     details = compute_payout_details(
         tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
         cfg["max_boost_dollars"], used_stake, leg_mult_product,
@@ -1559,8 +1571,9 @@ if _side_rows:
     with st.expander("Splash side check — which side has the better odds ratio", expanded=True):
         st.caption(
             "q/p = your probability ÷ Splash's %. Bet the side with the higher ratio; "
-            f"Splash caps the slip's combined modifier (product of 0.5/p) at "
-            f"{SPLASH_MAX_SLIP_MOD:.2f}x, so stacking long-shot legs past that adds risk "
+            "Splash caps the slip's combined modifier (product of 0.5/p) at "
+            + ", ".join(f"{v:.2f}x on {k}-pick" for k, v in sorted(SPLASH_MAX_SLIP_MOD.items()))
+            + " (no cap observed on other sizes), so stacking long-shot legs past that adds risk "
             "with no extra payout. Below the cap, "
             "a slip is +EV when the product of its ratios beats 1 ÷ hold "
             "(1.33 for 2-pick, 1.60 for 3–5-pick, 1.83 for 6-pick)."
