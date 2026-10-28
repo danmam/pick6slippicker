@@ -532,20 +532,27 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
         leg_mult_product *= m
     if leg_cap is not None:
         leg_mult_product = min(leg_mult_product, leg_cap)
-    details = compute_payout_details(
-        tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
-        cfg["max_boost_dollars"], used_stake, leg_mult_product,
-        chalk_factor=chalk_factor,
-        sweat_free_fraction=cfg["sweat_free_fraction"],
-        stake_back_on_win=cfg["stake_back_on_win"],
-        refund_partial_wins=cfg["refund_partial_wins"],
-    )
+    def details_at(stake):
+        return compute_payout_details(
+            tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
+            cfg["max_boost_dollars"], stake, leg_mult_product,
+            chalk_factor=chalk_factor,
+            sweat_free_fraction=cfg["sweat_free_fraction"],
+            stake_back_on_win=cfg["stake_back_on_win"],
+            refund_partial_wins=cfg["refund_partial_wins"],
+        )
+
+    details = details_at(used_stake)
+    # Payouts at the assumed max bet, independent of the Kelly stake (shown
+    # even when Kelly recommends nothing).
+    max_bet_details = details_at(cfg.get("payout_bet", 0.0))
     return {
         "EV": ev_decimal,
         "Any Win %": win_prob_any,
         "Stake": used_stake,
         "EG": eg_bps,
         "Details": details,
+        "MaxBetDetails": max_bet_details,
         "HasOverage": any(ov > 0 for (_floor, ov) in tier_components.values()),
     }
 
@@ -1216,6 +1223,16 @@ else:
     max_stake_small = 0.0
     max_stake_large = 0.0
 
+payout_bet = st.sidebar.number_input(
+    "Assumed Max Bet for Payouts ($)",
+    key="payout_bet",
+    value=100.0,
+    min_value=0.0,
+    step=5.0,
+    help="Same bet for every slip size. The results table shows the top prize and "
+         "profit at this bet, independent of the Kelly-recommended stake."
+)
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("Promo Settings")
 sweat_free_enabled = st.sidebar.checkbox(
@@ -1658,6 +1675,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
         "max_stake_small": max_stake_small,
         "max_stake_large": max_stake_large,
         "max_stake_input": max_stake_input,
+        "payout_bet": payout_bet,
         # Splash caps the slip's combined leg modifier.
         "leg_mult_cap": (SPLASH_MAX_SLIP_MOD
                          if (not use_std_leg_mults and _splash_format) else None),
@@ -1760,6 +1778,12 @@ if st.button("Calculate EV & Stakes", type="primary"):
         if top_detail and res['Stake'] > 0:
             row["Top Prize"] = f"${top_detail['prize_dollars']:.2f}"
             row["Top Profit"] = f"${top_detail['profit_dollars']:.2f}"
+        if payout_bet > 0:
+            top_max = res['MaxBetDetails'][0] if res['MaxBetDetails'] else None
+            row[f"Top Prize @ ${payout_bet:,.2f}"] = (
+                f"${top_max['prize_dollars']:.2f}" if top_max else "—")
+            row[f"Top Profit @ ${payout_bet:,.2f}"] = (
+                f"${top_max['profit_dollars']:.2f}" if top_max else "—")
         table_data.append(row)
     st.table(table_data)
 
