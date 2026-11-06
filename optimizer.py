@@ -993,6 +993,27 @@ PROMO_PRESETS = {
     },
 }
 
+# Leg-pool mode: how many candidate legs can be entered.
+DEFAULT_LEG_POOL_SIZE = 6
+MIN_LEG_POOL_SIZE = 2
+MAX_LEG_POOL_SIZE = 30
+
+
+def rank_legs(probs, leg_mults):
+    """Order leg indices best to worst.
+
+    A leg is ranked by its win probability times its leg multiplier -- its
+    expected contribution to the slip payout. The all-correct payout of an
+    N-leg slip scales with the product of p * m over its legs, so the N
+    highest-ranked legs maximize it; ties break on win probability. (Lower
+    tiers and Splash's slip-modifier cap make this a close heuristic rather
+    than exact for those cases.)
+    """
+    return sorted(range(len(probs)),
+                  key=lambda i: (probs[i] * leg_mults[i], probs[i]),
+                  reverse=True)
+
+
 # --- SESSION STATE INITIALIZATION ---
 _SS_DEFAULTS = {
     "boost_mult": 1.0,
@@ -1005,6 +1026,7 @@ _SS_DEFAULTS = {
     "max_stake_small": 0.0,
     "max_stake_large": 0.0,
     "show_78": False,
+    "rank_legs": True,
     "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
     "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 20.0, "f6": 40.0, "f7": 0.0, "f8": 0.0,
@@ -1072,6 +1094,16 @@ def _cv_number_input(container, label, name, default, minimum=None, **kwargs):
     if minimum is not None:
         kwargs["min_value"] = minimum
     val = float(container.number_input(label, key=wkey, **kwargs))
+    st.session_state[f"_cv_{name}"] = val
+    return val
+
+
+def _cv_text_input(container, label, name, default, **kwargs):
+    """text_input whose value survives runs where the widget isn't rendered."""
+    wkey = _cv_key(name)
+    if wkey not in st.session_state or not isinstance(st.session_state[wkey], str):
+        st.session_state[wkey] = _cv_get(name, default)
+    val = container.text_input(label, key=wkey, **kwargs)
     st.session_state[f"_cv_{name}"] = val
     return val
 
@@ -1293,9 +1325,18 @@ use_std_leg_mults = st.sidebar.checkbox(
 )
 
 _show_78_sidebar = st.session_state.get("show_78", False)
-_n_leg_inputs = 8 if _show_78_sidebar else 6
-leg_mults = [1.0] * 8
-leg_inputs = [_ud_base if _ud_format else SPLASH_BASE_PCT if _splash_format else 1.0] * 8
+# Leg-pool mode (on by default): enter any number of candidate legs; each slip
+# size is priced with its best N. Both widgets live on the main page, which
+# renders after the sidebar, so read their live keys here.
+_rank_legs_sidebar = st.session_state.get("rank_legs", True)
+_pool_size_sidebar = int(st.session_state.get(
+    _cv_key("leg_pool_size"), _cv_get("leg_pool_size", DEFAULT_LEG_POOL_SIZE)))
+_pool_size_sidebar = max(MIN_LEG_POOL_SIZE, min(MAX_LEG_POOL_SIZE, _pool_size_sidebar))
+_n_leg_inputs = (_pool_size_sidebar if _rank_legs_sidebar
+                 else 8 if _show_78_sidebar else 6)
+_n_leg_slots = max(8, _n_leg_inputs)
+leg_mults = [1.0] * _n_leg_slots
+leg_inputs = [_ud_base if _ud_format else SPLASH_BASE_PCT if _splash_format else 1.0] * _n_leg_slots
 
 if not use_std_leg_mults:
     _leg_format = _cv_selectbox(
@@ -1485,13 +1526,37 @@ else:
     p8_i2 = st.session_state.get("p8_i2", 0.0)
 
 st.header("2. Play Odds (Win Probability)")
-_n_odds = 8 if show_78 else 6
-odds_cols = st.columns(_n_odds)
+rank_mode = st.checkbox(
+    "Pick the best legs from a pool",
+    key="rank_legs",
+    help="Enter as many candidate legs as you like. They are ranked best to "
+         "worst (win probability × leg multiplier) and each N-pick slip is "
+         "priced with the best N legs. Uncheck to price each slip with legs "
+         "1..N in the order entered."
+)
+if rank_mode:
+    _n_odds = int(_cv_number_input(
+        st, "Number of legs in pool", "leg_pool_size", float(DEFAULT_LEG_POOL_SIZE),
+        minimum=float(MIN_LEG_POOL_SIZE), max_value=float(MAX_LEG_POOL_SIZE),
+        step=1.0, format="%.0f",
+        help="How many candidate legs to enter. Slip sizes larger than the pool are skipped."
+    ))
+    if _n_odds != _n_leg_inputs:
+        # The sidebar was built for a different pool size; rebuild it.
+        st.rerun()
+else:
+    _n_odds = 8 if show_78 else 6
+_odds_per_row = 8 if show_78 or rank_mode else 6
+odds_cols = []
+for _row_start in range(0, _n_odds, _odds_per_row):
+    odds_cols.extend(st.columns(_odds_per_row)[:min(_odds_per_row, _n_odds - _row_start)])
 probs = []
+odds_text = []
 for i, col in enumerate(odds_cols):
-    val = col.text_input(f"Leg {i+1} Odds", value="-110", key=f"l{i}")
+    val = _cv_text_input(col, f"Leg {i+1} Odds", f"l{i}", "-110")
     prob = american_to_prob(val)
     probs.append(prob)
+    odds_text.append(val)
     if not use_std_leg_mults and _ud_format:
         col.caption(f"{prob*100:.1f}% | {leg_inputs[i]:.2f}x → x{leg_mults[i]:.3f}")
     elif not use_std_leg_mults and _splash_format:
@@ -1500,6 +1565,27 @@ for i, col in enumerate(odds_cols):
         col.caption(f"{prob*100:.1f}% | x{leg_mults[i]}")
     else:
         col.caption(f"{prob*100:.1f}%")
+
+leg_order = list(range(_n_odds))
+if rank_mode:
+    leg_order = rank_legs(probs, leg_mults[:_n_odds])
+    # Price every slip size off the ranked list: the best N legs are its first N.
+    leg_labels = [f"Leg {i+1}" for i in leg_order]
+    _odds_ranked = [odds_text[i] for i in leg_order]
+    probs = [probs[i] for i in leg_order]
+    leg_mults = [leg_mults[i] for i in leg_order]
+    leg_inputs = [leg_inputs[i] for i in leg_order]
+    with st.expander("Legs ranked best to worst", expanded=True):
+        _ranked_rows = []
+        for r, (lbl, odds, p, m) in enumerate(zip(leg_labels, _odds_ranked, probs, leg_mults)):
+            row = {"Rank": r + 1, "Leg": lbl, "Odds": odds, "Win %": f"{p*100:.1f}%"}
+            if not use_std_leg_mults:
+                row["Leg Mult"] = f"{m:.3f}x"
+                row["Win % × Mult"] = f"{p*m*100:.1f}%"
+            _ranked_rows.append(row)
+        st.table(_ranked_rows)
+else:
+    leg_labels = [f"Leg {i+1}" for i in range(_n_odds)]
 
 st.markdown("---")
 sc1, sc2, _ = st.columns([1, 1, 2])
@@ -1577,6 +1663,9 @@ if st.button("Calculate EV & Stakes", type="primary"):
     _comparing = bool(_variants) and _ladder_choice == LADDER_AUTO
     _box_label = _ladder_choice if (_variants and not _comparing) else "Payout boxes"
 
+    _skipped_sizes = [n for n, _a, _f in slip_configs if n > len(probs)]
+    slip_configs = [c for c in slip_configs if c[0] <= len(probs)]
+
     for n, avg_structure, floor_structure in slip_configs:
         # The chalk adjustment depends on the legs, not the ladder, so every
         # candidate for this slip size is priced under the same factor.
@@ -1612,7 +1701,15 @@ if st.button("Calculate EV & Stakes", type="primary"):
         result["Ladder"] = best_name
         result["Priced"] = priced
         result["Chalk"] = chalk
+        result["Legs"] = leg_labels[:n]
         results.append(result)
+
+    if _skipped_sizes:
+        st.warning("Not enough legs entered for: "
+                   + ", ".join(f"{n}-Pick" for n in _skipped_sizes)
+                   + ". Add legs to the pool to price them.")
+    if not results:
+        st.stop()
 
     # --- DISPLAY RESULTS ---
     _any_compared = any(len(res['Priced']) > 1 for res in results)
@@ -1661,6 +1758,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
         }
         if _any_compared:
             row["Ladder"] = res['Ladder']
+        if rank_mode:
+            row["Legs Used (best N)"] = ", ".join(l.replace("Leg ", "L") for l in res['Legs'])
         row.update({
             "EV %": f"{res['EV']*100:.2f}%",
             "Exp. Growth (bps)": f"{res['EG']:.2f}",
