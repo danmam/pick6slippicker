@@ -1387,23 +1387,27 @@ if not use_std_leg_mults:
     st.sidebar.subheader("Individual Leg Prices" if _ud_format
                          else "Individual Leg %" if _splash_format
                          else "Individual Leg Multipliers")
-    lm_cols = st.sidebar.columns(3)
+    # One row of 3 columns per 3 legs (not 3 tall columns) so the page order,
+    # and therefore Tab, runs Leg 1 -> Leg 2 -> Leg 3 -> Leg 4 ...
+    lm_cols = []
+    for _row_start in range(0, _n_leg_inputs, 3):
+        lm_cols.extend(st.sidebar.columns(3))
     for i in range(_n_leg_inputs):
         if _ud_format:
             leg_inputs[i] = _cv_number_input(
-                lm_cols[i % 3], f"Leg {i+1} price", f"ud_leg_price_{i}", float(_ud_base),
+                lm_cols[i], f"Leg {i+1} price", f"ud_leg_price_{i}", float(_ud_base),
                 minimum=0.0, step=0.01, format="%.2f"
             )
             leg_mults[i] = underdog_price_to_leg_mult(leg_inputs[i], _ud_base, _ud_shift)
         elif _splash_format:
             leg_inputs[i] = _cv_number_input(
-                lm_cols[i % 3], f"Leg {i+1} %", f"splash_leg_pct_{i}", SPLASH_BASE_PCT,
+                lm_cols[i], f"Leg {i+1} %", f"splash_leg_pct_{i}", SPLASH_BASE_PCT,
                 minimum=1.0, max_value=99.0, step=1.0, format="%.1f"
             )
             leg_mults[i] = splash_pct_to_leg_mult(leg_inputs[i])
         else:
             leg_mults[i] = _cv_number_input(
-                lm_cols[i % 3], f"Leg {i+1} x", f"leg_mult_{i}", 1.0,
+                lm_cols[i], f"Leg {i+1} x", f"leg_mult_{i}", 1.0,
                 minimum=0.0, step=0.01, format="%.2f"
             )
             leg_inputs[i] = leg_mults[i]
