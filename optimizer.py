@@ -67,51 +67,6 @@ def leg_mult_to_underdog_price(mult, base=UNDERDOG_BASE_PRICE, shift=UNDERDOG_PR
     return float(shift) + (float(base) - float(shift)) * mult
 
 
-# --- SPLASH SPORTS LEG FORMAT ---
-# Splash Sports shows each leg as a percentage, where 50% is an unmodified
-# leg. A leg's factor is 0.5 / p and the slip pays base x product of factors,
-# rounded to two decimals (all-or-nothing, no partial payouts). Base payouts:
-# 2 = 3x, 3 = 5x, 4 = 10x, 5 = 20x, 6 = 35x. Verified against 13 observed
-# 3-pick slips, e.g.
-#   50/50/55 -> 5 * 0.5/0.55             = 4.55x
-#   50/50/45 -> 5 * 0.5/0.45             = 5.56x
-#   50/55/45 -> 5 * 0.5/0.55 * 0.5/0.45  = 5.05x
-#   50/45/45 -> 5 * (0.5/0.45)^2         = 6.17x
-# The factor simply swaps in the leg's implied odds, so Splash's hold is
-# fixed by slip size (3/4, 5/8, 10/16, 20/32, 35/64 of fair) and a slip's EV
-# is hold * product(q/p) - 1, where q is your true probability.
-SPLASH_BASE_PCT = 50.0   # displayed % of an unmodified (1.0x) leg
-# Splash caps the slip's TOTAL leg modifier (product of 0.5/p factors) at
-# 1.33x. Observed 10/7/26 on 4-pick (10x base) slips with three 50% legs:
-#   45% -> 11.11x, 43% -> 11.63x, 40% -> 12.50x, 39% -> 12.82x  (uncapped)
-#   36% -> 13.30x (raw 13.89x), 44/35/43/40 -> 13.30x (raw 23.60x)
-# and a 3-pick 50/50/36 -> 6.65x (raw 6.94x).
-# The cap is per slip SIZE: a 5-pick 50/50/50/40/44 paid 28.41x on 10/28/26
-# (raw 1.4205 modifier, uncapped), so 5-picks are not held to 1.33. Sizes not
-# listed are treated as uncapped until a cap is observed.
-# No floor on discounted (>50%) slips has been observed.
-SPLASH_MAX_SLIP_MOD = {3: 1.33, 4: 1.33}
-
-
-def splash_slip_cap(n, caps=SPLASH_MAX_SLIP_MOD):
-    """Leg-modifier cap for an n-pick slip (None = uncapped). Accepts a dict
-    keyed by slip size, a single number (applies to all sizes), or None."""
-    if isinstance(caps, dict):
-        return caps.get(n)
-    return caps
-
-
-def splash_pct_to_leg_mult(pct, base=SPLASH_BASE_PCT):
-    """Convert a Splash leg % (e.g. 55 or 0.55) to a 1.0x-scale multiplier."""
-    try:
-        pct = float(pct)
-    except (TypeError, ValueError):
-        return 1.0
-    if 0 < pct <= 1:          # accept 0.55 as well as 55
-        pct *= 100.0
-    return float(base) / pct if pct > 0 else 1.0
-
-
 def solve_general_kelly(outcomes):
     """
     Solves for optimal Kelly fraction 'f' given a list of (probability, net_odds) tuples.
@@ -181,6 +136,24 @@ def calculate_expected_growth(outcomes, stake_fraction):
 # tiers) structure and are an editable assumption.
 _TIER_SHARE_SPLITS = {1: [1.0], 2: [0.8, 0.2], 3: [0.7, 0.2, 0.1]}
 POOL_LEG_PROB = 0.5      # assumed pool-typical per-leg win rate (DK curates ~coinflips)
+# --- Calibration from settled DK entries (ledger Jan 2025 - Nov 2026) ---
+# 97 all-correct wins matched to DK's ledger, which splits every payout into
+# "Minimum Payout", "Extra Contest Prizes" and boost "Reward Winnings".
+#  * Overage is lumpy: 2-3 pick wins paid extra 13% of the time, 4+ pick wins
+#    55%, lower-tier (4/5, 5/6) hits 69%. Staking on the mean overstates
+#    growth, so Kelly/EG split each overage into "hit" and "no hit" outcomes
+#    with the same mean (EV is unchanged).
+#  * Against the preset averages, realized overage on 2-3 pick slips ran at
+#    ~0.35x of (avg - floor) all-time and ~0.15x since April 2026; 4+ pick
+#    slips ran well above 1x through March 2026 and ~0.8x since (4 wins).
+#    The scales below multiply the preset top-tier overage accordingly.
+#  * Boosts: through April 2026 DK boosted minimum + extra; from June 2026
+#    the boost is exactly pct x minimum payout. Floor-only is the live rule.
+DK_OVERAGE_SCALE_SMALL = 0.25   # 2-3 pick slips
+DK_OVERAGE_SCALE_LARGE = 1.0    # 4+ pick slips
+DK_OVERAGE_HIT_SMALL = 0.10     # P(extra prize | all-correct), 2-3 picks
+DK_OVERAGE_HIT_LARGE = 0.50     # P(extra prize | all-correct), 4+ picks
+DK_OVERAGE_HIT_LOWER = 0.60     # P(extra prize | lower-tier hit)
 CHALK_FACTOR_MIN = 0.25  # clamp on the chalk adjustment
 CHALK_FACTOR_MAX = 4.0
 
@@ -219,7 +192,8 @@ def chalk_overage_factor(probs, leg_multipliers=None, beta=1.0,
 
 def build_tier_components(payout_structure, floor_structure, n_legs,
                           estimate_lower_tier_overage=True,
-                          pool_leg_prob=POOL_LEG_PROB):
+                          pool_leg_prob=POOL_LEG_PROB,
+                          top_overage_scale=1.0):
     """
     Decompose per-tier payouts into (floor_mult, overage_mult).
 
@@ -232,6 +206,9 @@ def build_tier_components(payout_structure, floor_structure, n_legs,
         estimate_lower_tier_overage: apportion the top-tier overage to lower
                           tiers by parimutuel intensity (see module docstring).
                           False = lower tiers pay floors only (conservative).
+        top_overage_scale: multiplier on the top-tier overage (avg - floor),
+                          calibrated from settled entries. Lower-tier overage
+                          is apportioned from the scaled value.
 
     Returns:
         {wins: (floor_mult, overage_mult)} for paying tiers.
@@ -249,7 +226,7 @@ def build_tier_components(payout_structure, floor_structure, n_legs,
     top_floor = floor_structure.get(top, 0.0)
     if top_floor <= 0:
         top_floor = top_avg
-    top_over = max(0.0, top_avg - top_floor)
+    top_over = max(0.0, top_avg - top_floor) * max(0.0, top_overage_scale)
 
     splits = _TIER_SHARE_SPLITS.get(len(paying))
     if splits is None:
@@ -279,7 +256,7 @@ def calculate_complex_outcomes(probs, leg_multipliers, tier_components, global_b
                                max_boost_amount=0.0, stake=1.0, boost_on_gross=True,
                                sweat_free_fraction=0.0, stake_back_on_win=False,
                                refund_partial_wins=True, chalk_factor=1.0,
-                               leg_mult_cap=None):
+                               overage_hit_prob=None):
     """
     Generates all 2^N scenarios to accurately calculate EV with specific leg multipliers.
 
@@ -306,6 +283,11 @@ def calculate_complex_outcomes(probs, leg_multipliers, tier_components, global_b
                             shortfall. False leaves partial-win tiers untouched.
         chalk_factor: Scales the overage of the all-correct tier only
                       (see chalk_overage_factor).
+        overage_hit_prob: None, or (h_top, h_lower). When given, a tier's
+                      overage is paid as overage/h with probability h and as
+                      nothing otherwise, instead of as its mean every time.
+                      The mean (and so EV) is unchanged; Kelly and expected
+                      growth see the real spread.
 
     Returns:
         List of (probability, net_outcome) tuples.
@@ -328,9 +310,6 @@ def calculate_complex_outcomes(probs, leg_multipliers, tier_components, global_b
             else:
                 scenario_prob *= (1 - probs[i])
 
-        if leg_mult_cap is not None and scenario_leg_mult_product > leg_mult_cap:
-            scenario_leg_mult_product = leg_mult_cap
-
         if wins in tier_components:
             floor_mult, overage_mult = tier_components[wins]
 
@@ -352,27 +331,35 @@ def calculate_complex_outcomes(probs, leg_multipliers, tier_components, global_b
                 if max_boost_per_dollar is not None and boost_cash > max_boost_per_dollar:
                     boost_cash = max_boost_per_dollar
 
-                gross_payout = base_gross + boost_cash + overage
+                guaranteed = base_gross + boost_cash
             else:
                 # Explicit 0.0 payout in structure (rare but possible)
-                gross_payout = 0.0
+                guaranteed = 0.0
+                overage = 0.0
 
-            if gross_payout < 1.0:
-                # Partial win/loss: the payout alone is worth less than the stake.
-                if refund_partial_wins:
-                    gross_payout += (1.0 - gross_payout) * sweat_free_fraction
-            elif stake_back_on_win:
-                # Full win (payout already covers the stake).
-                gross_payout += sweat_free_fraction
+            # Overage is paid in full or not at all; split the scenario so the
+            # staking maths sees both cases. One branch when it is certain.
+            branches = [(1.0, overage)]
+            if overage > 0 and overage_hit_prob is not None:
+                h = overage_hit_prob[0] if wins == num_legs else overage_hit_prob[1]
+                if 0.0 < h < 1.0:
+                    branches = [(1.0 - h, 0.0), (h, overage / h)]
 
-            net_outcome = gross_payout - 1.0
+            for weight, paid_overage in branches:
+                gross_payout = guaranteed + paid_overage
+                if gross_payout < 1.0:
+                    # Partial win/loss: the payout alone is worth less than the stake.
+                    if refund_partial_wins:
+                        gross_payout += (1.0 - gross_payout) * sweat_free_fraction
+                elif stake_back_on_win:
+                    # Full win (payout already covers the stake).
+                    gross_payout += sweat_free_fraction
+                outcomes.append((scenario_prob * weight, gross_payout - 1.0))
 
         else:
             # Outcome NOT defined in structure (typically a Loss)
-            gross_payout = sweat_free_fraction
-            net_outcome = sweat_free_fraction - 1.0
-
-        outcomes.append((scenario_prob, net_outcome))
+            # sweat_free_fraction: 0.0 = full loss, 1.0 = full refund
+            outcomes.append((scenario_prob, sweat_free_fraction - 1.0))
 
     return outcomes
 
@@ -453,7 +440,10 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     """
     current_probs = probs[:n]
     current_leg_mults = leg_mults[:n]
-    leg_cap = splash_slip_cap(n, cfg.get("leg_mult_cap"))
+    # (P(extra | all correct), P(extra | lower tier)) for this slip size, or
+    # None to pay the mean overage on every win.
+    _hits = cfg.get("overage_hits")
+    hit_prob = None if not _hits else (_hits[0] if n <= 3 else _hits[1], _hits[2])
 
     def outcomes_for(max_boost_amount, stake):
         return calculate_complex_outcomes(
@@ -464,7 +454,7 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
             stake_back_on_win=cfg["stake_back_on_win"],
             refund_partial_wins=cfg["refund_partial_wins"],
             chalk_factor=chalk_factor,
-            leg_mult_cap=leg_cap,
+            overage_hit_prob=hit_prob,
         )
 
     cap = ((cfg["max_stake_small"] if n <= 3 else cfg["max_stake_large"])
@@ -503,29 +493,20 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     leg_mult_product = 1.0
     for m in current_leg_mults:
         leg_mult_product *= m
-    if leg_cap is not None:
-        leg_mult_product = min(leg_mult_product, leg_cap)
-    def details_at(stake):
-        return compute_payout_details(
-            tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
-            cfg["max_boost_dollars"], stake, leg_mult_product,
-            chalk_factor=chalk_factor,
-            sweat_free_fraction=cfg["sweat_free_fraction"],
-            stake_back_on_win=cfg["stake_back_on_win"],
-            refund_partial_wins=cfg["refund_partial_wins"],
-        )
-
-    details = details_at(used_stake)
-    # Payouts at the assumed max bet, independent of the Kelly stake (shown
-    # even when Kelly recommends nothing).
-    max_bet_details = details_at(cfg.get("payout_bet", 0.0))
+    details = compute_payout_details(
+        tier_components, n, cfg["boost_mult"], cfg["boost_on_gross"],
+        cfg["max_boost_dollars"], used_stake, leg_mult_product,
+        chalk_factor=chalk_factor,
+        sweat_free_fraction=cfg["sweat_free_fraction"],
+        stake_back_on_win=cfg["stake_back_on_win"],
+        refund_partial_wins=cfg["refund_partial_wins"],
+    )
     return {
         "EV": ev_decimal,
         "Any Win %": win_prob_any,
         "Stake": used_stake,
         "EG": eg_bps,
         "Details": details,
-        "MaxBetDetails": max_bet_details,
         "HasOverage": any(ov > 0 for (_floor, ov) in tier_components.values()),
     }
 
@@ -533,15 +514,6 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
 # --- PRESETS DATA ---
 PRESETS = {
     "Custom": None,
-    "Splash": {
-        "p2": 3.0,
-        "p3": 5.0, "p3_i": 0.0,
-        "p4": 10.0, "p4_i": 0.0,
-        "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
-        "p6": 35.0, "p6_i": 0.0, "p6_i2": 0.0,
-        "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
-        "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
-    },
     "Betr Nukes": {
         "p2": 6.0,
         "p3": 10.0, "p3_i": 0.0,
@@ -846,7 +818,7 @@ PRESETS = {
         "p3": 6.0, "p3_i": 0.0,
         "p4": 10.0, "p4_i": 0.0,
         "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
-        "p6": 35.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p6": 40.0, "p6_i": 0.0, "p6_i2": 0.0,
         "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 100.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
@@ -934,12 +906,6 @@ def scaled_tiers(tiers, scale):
 # 1.0x scale; "underdog" presets take leg prices as Underdog displays them.
 _PRESET_LEG_MULT_FORMATS = {
     "Underdog Fantasy": "underdog",
-    "Splash": "splash",
-}
-
-# Other settings a preset forces on load (applied after the generic reset).
-_PRESET_SETTINGS = {
-    "Splash": {"boost_on_gross": True},
 }
 
 # Max stake defaults per preset (0 means no cap)
@@ -950,7 +916,6 @@ _PRESET_MAX_STAKES = {
     "Drafters": 10.0,
     "Drafters (Power Only)": 10.0,
     "Underdog Fantasy": 25.0,
-    "Splash": 5.0,
 }
 
 # --- PROMO PRESETS DATA ---
@@ -993,27 +958,6 @@ PROMO_PRESETS = {
     },
 }
 
-# Leg-pool mode: how many candidate legs can be entered.
-DEFAULT_LEG_POOL_SIZE = 6
-MIN_LEG_POOL_SIZE = 2
-MAX_LEG_POOL_SIZE = 30
-
-
-def rank_legs(probs, leg_mults):
-    """Order leg indices best to worst.
-
-    A leg is ranked by its win probability times its leg multiplier -- its
-    expected contribution to the slip payout. The all-correct payout of an
-    N-leg slip scales with the product of p * m over its legs, so the N
-    highest-ranked legs maximize it; ties break on win probability. (Lower
-    tiers and Splash's slip-modifier cap make this a close heuristic rather
-    than exact for those cases.)
-    """
-    return sorted(range(len(probs)),
-                  key=lambda i: (probs[i] * leg_mults[i], probs[i]),
-                  reverse=True)
-
-
 # --- SESSION STATE INITIALIZATION ---
 _SS_DEFAULTS = {
     "boost_mult": 1.0,
@@ -1026,7 +970,6 @@ _SS_DEFAULTS = {
     "max_stake_small": 0.0,
     "max_stake_large": 0.0,
     "show_78": False,
-    "rank_legs": True,
     "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
     "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     "f2": 3.0, "f3": 6.0, "f4": 10.0, "f5": 20.0, "f6": 40.0, "f7": 0.0, "f8": 0.0,
@@ -1098,16 +1041,6 @@ def _cv_number_input(container, label, name, default, minimum=None, **kwargs):
     return val
 
 
-def _cv_text_input(container, label, name, default, **kwargs):
-    """text_input whose value survives runs where the widget isn't rendered."""
-    wkey = _cv_key(name)
-    if wkey not in st.session_state or not isinstance(st.session_state[wkey], str):
-        st.session_state[wkey] = _cv_get(name, default)
-    val = container.text_input(label, key=wkey, **kwargs)
-    st.session_state[f"_cv_{name}"] = val
-    return val
-
-
 def _cv_selectbox(container, label, name, options, default, **kwargs):
     """selectbox whose value survives runs where the widget isn't rendered."""
     wkey = _cv_key(name)
@@ -1148,8 +1081,6 @@ if selected_preset != _prev_preset:
         st.session_state["max_stake_small"] = 0.0
         st.session_state["max_stake_large"] = 0.0
         st.session_state["max_stake_input"] = _PRESET_MAX_STAKES.get(selected_preset, 0.0)
-        for _key, _val in _PRESET_SETTINGS.get(selected_preset, {}).items():
-            st.session_state[_key] = _val
         # Load payout multipliers
         for _key, _val in PRESETS[selected_preset].items():
             st.session_state[_key] = _val
@@ -1213,16 +1144,6 @@ else:
     max_stake_small = 0.0
     max_stake_large = 0.0
 
-payout_bet = st.sidebar.number_input(
-    "Assumed Max Bet for Payouts ($)",
-    key="payout_bet",
-    value=100.0,
-    min_value=0.0,
-    step=5.0,
-    help="Same bet for every slip size. The results table shows the top prize and "
-         "profit at this bet, independent of the Kelly-recommended stake."
-)
-
 st.sidebar.markdown("---")
 st.sidebar.subheader("Promo Settings")
 sweat_free_enabled = st.sidebar.checkbox(
@@ -1285,13 +1206,45 @@ boost_on_gross = st.sidebar.checkbox(
 st.sidebar.markdown("---")
 st.sidebar.subheader("Parimutuel Overage (DK Pick6)")
 chalk_beta = st.sidebar.slider(
-    "Chalk sensitivity (β)", 0.0, 3.0, 1.0, 0.1,
+    "Chalk sensitivity (β)", 0.0, 3.0, 0.0, 0.1,
     help="Scales the all-correct parimutuel overage by (q₀/q)^β, where q is the "
          "product of your true leg probabilities and q₀ the pool-typical slip "
          "(50% per standard leg, ~50%/mult for multiplier legs). Chalkier slips "
          "than typical share the pool with more winners and get less overage; "
-         "contrarian slips get more. Clamped to [0.25x, 4x]. 0 disables."
+         "contrarian slips get more. Clamped to [0.25x, 4x]. 0 disables. "
+         "Default 0: settled entries showed no haircut versus the presets, and "
+         "the overage scales below already reflect your own slips."
 )
+_osc1, _osc2 = st.sidebar.columns(2)
+overage_scale_small = _osc1.number_input(
+    "Overage scale: 2-3 picks", min_value=0.0, max_value=5.0,
+    value=DK_OVERAGE_SCALE_SMALL, step=0.05,
+    help="Multiplies the preset all-correct overage (average − floor). Settled "
+         "entries paid ~0.35x of it on 2-3 pick slips all-time and ~0.15x "
+         "since April 2026. 1.0 = trust the published averages."
+)
+overage_scale_large = _osc2.number_input(
+    "Overage scale: 4+ picks", min_value=0.0, max_value=5.0,
+    value=DK_OVERAGE_SCALE_LARGE, step=0.05,
+    help="Same, for 4+ pick slips (and the lower tiers derived from them). "
+         "Settled 4+ pick wins ran well above 1x through March 2026 and "
+         "~0.8x since, on very few wins."
+)
+lumpy_overage = st.sidebar.checkbox(
+    "Stake on lumpy overage", value=True,
+    help="Extra prizes arrive on a minority of wins and are large when they "
+         "do. Checked: Kelly and expected growth treat overage as hit-or-miss "
+         "with the same mean, which lowers stakes on overage-heavy slips. "
+         "EV is unchanged. Unchecked: every win pays the mean overage."
+)
+if lumpy_overage:
+    with st.sidebar.expander("Chance a win pays extra"):
+        overage_hit_small = st.slider("All correct, 2-3 picks", 0.02, 1.0, DK_OVERAGE_HIT_SMALL, 0.01)
+        overage_hit_large = st.slider("All correct, 4+ picks", 0.02, 1.0, DK_OVERAGE_HIT_LARGE, 0.01)
+        overage_hit_lower = st.slider("Lower tiers (4/5, 5/6, ...)", 0.02, 1.0, DK_OVERAGE_HIT_LOWER, 0.01)
+    overage_hits = (overage_hit_small, overage_hit_large, overage_hit_lower)
+else:
+    overage_hits = None
 est_lower_overage = st.sidebar.checkbox(
     "Estimate lower-tier overage", value=True,
     help="Intermediate tiers (4/5, 5/6, ...) only have guaranteed floors — DK "
@@ -1309,50 +1262,30 @@ if not (isinstance(_ud_base, (int, float)) and isinstance(_ud_shift, (int, float
         and _ud_base - _ud_shift > 0):
     _ud_base, _ud_shift = UNDERDOG_BASE_PRICE, UNDERDOG_PRICE_SHIFT
 _ud_format = _leg_format == "underdog"
-_splash_format = _leg_format == "splash"
 
 use_std_leg_mults = st.sidebar.checkbox(
-    f"All legs at {SPLASH_BASE_PCT:.0f}%?" if _splash_format
-    else f"All legs at standard price ({_ud_base:.2f}x)?" if _ud_format
-    else "All leg multipliers 1.0x?",
+    f"All legs at standard price ({_ud_base:.2f}x)?" if _ud_format else "All leg multipliers 1.0x?",
     key="use_std_leg_mults",
     help="Underdog prices every leg, so an unmodified leg still shows a multiplier "
          f"({_ud_base:.2f}x). Check this when no leg is boosted or discounted."
-         if _ud_format
-         else "Splash shows each leg as a %, and 50% is unmodified. Uncheck to enter "
-              "the % shown for each leg; a leg pays 0.5 / p times the base."
-         if _splash_format else None
+         if _ud_format else None
 )
 
 _show_78_sidebar = st.session_state.get("show_78", False)
-# Leg-pool mode (on by default): enter any number of candidate legs; each slip
-# size is priced with its best N. Both widgets live on the main page, which
-# renders after the sidebar, so read their live keys here.
-_rank_legs_sidebar = st.session_state.get("rank_legs", True)
-_pool_size_sidebar = int(st.session_state.get(
-    _cv_key("leg_pool_size"), _cv_get("leg_pool_size", DEFAULT_LEG_POOL_SIZE)))
-_pool_size_sidebar = max(MIN_LEG_POOL_SIZE, min(MAX_LEG_POOL_SIZE, _pool_size_sidebar))
-_n_leg_inputs = (_pool_size_sidebar if _rank_legs_sidebar
-                 else 8 if _show_78_sidebar else 6)
-_n_leg_slots = max(8, _n_leg_inputs)
-leg_mults = [1.0] * _n_leg_slots
-leg_inputs = [_ud_base if _ud_format else SPLASH_BASE_PCT if _splash_format else 1.0] * _n_leg_slots
+_n_leg_inputs = 8 if _show_78_sidebar else 6
+leg_mults = [1.0] * 8
+leg_inputs = [_ud_base if _ud_format else 1.0] * 8
 
 if not use_std_leg_mults:
     _leg_format = _cv_selectbox(
         st.sidebar, "Leg multiplier format", "leg_mult_format",
-        ["standard", "underdog", "splash"], "standard",
-        format_func=lambda v: {
-            "standard": "Standard (1.0x = unmodified)",
-            "underdog": f"Underdog leg price ({_ud_base:.2f}x = unmodified)",
-            "splash": f"Splash leg % ({SPLASH_BASE_PCT:.0f}% = unmodified)",
-        }[v],
-        help="Underdog Fantasy shows each leg's price and Splash shows each leg's % "
-             "instead of a 1.0x-scale modifier. Picking those formats lets you type "
-             "the values straight off the slip."
+        ["standard", "underdog"], "standard",
+        format_func=lambda v: "Standard (1.0x = unmodified)" if v == "standard"
+                              else f"Underdog leg price ({_ud_base:.2f}x = unmodified)",
+        help="Underdog Fantasy shows each leg's price instead of a 1.0x-scale modifier. "
+             "Picking that format lets you type the prices straight off the slip."
     )
     _ud_format = _leg_format == "underdog"
-    _splash_format = _leg_format == "splash"
 
     if _ud_format:
         with st.sidebar.expander("Leg price scale"):
@@ -1384,30 +1317,18 @@ if not use_std_leg_mults:
                 )
                 _ud_base, _ud_shift = UNDERDOG_BASE_PRICE, UNDERDOG_PRICE_SHIFT
 
-    st.sidebar.subheader("Individual Leg Prices" if _ud_format
-                         else "Individual Leg %" if _splash_format
-                         else "Individual Leg Multipliers")
-    # One row of 3 columns per 3 legs (not 3 tall columns) so the page order,
-    # and therefore Tab, runs Leg 1 -> Leg 2 -> Leg 3 -> Leg 4 ...
-    lm_cols = []
-    for _row_start in range(0, _n_leg_inputs, 3):
-        lm_cols.extend(st.sidebar.columns(3))
+    st.sidebar.subheader("Individual Leg Prices" if _ud_format else "Individual Leg Multipliers")
+    lm_cols = st.sidebar.columns(3)
     for i in range(_n_leg_inputs):
         if _ud_format:
             leg_inputs[i] = _cv_number_input(
-                lm_cols[i], f"Leg {i+1} price", f"ud_leg_price_{i}", float(_ud_base),
+                lm_cols[i % 3], f"Leg {i+1} price", f"ud_leg_price_{i}", float(_ud_base),
                 minimum=0.0, step=0.01, format="%.2f"
             )
             leg_mults[i] = underdog_price_to_leg_mult(leg_inputs[i], _ud_base, _ud_shift)
-        elif _splash_format:
-            leg_inputs[i] = _cv_number_input(
-                lm_cols[i], f"Leg {i+1} %", f"splash_leg_pct_{i}", SPLASH_BASE_PCT,
-                minimum=1.0, max_value=99.0, step=1.0, format="%.1f"
-            )
-            leg_mults[i] = splash_pct_to_leg_mult(leg_inputs[i])
         else:
             leg_mults[i] = _cv_number_input(
-                lm_cols[i], f"Leg {i+1} x", f"leg_mult_{i}", 1.0,
+                lm_cols[i % 3], f"Leg {i+1} x", f"leg_mult_{i}", 1.0,
                 minimum=0.0, step=0.01, format="%.2f"
             )
             leg_inputs[i] = leg_mults[i]
@@ -1530,66 +1451,19 @@ else:
     p8_i2 = st.session_state.get("p8_i2", 0.0)
 
 st.header("2. Play Odds (Win Probability)")
-rank_mode = st.checkbox(
-    "Pick the best legs from a pool",
-    key="rank_legs",
-    help="Enter as many candidate legs as you like. They are ranked best to "
-         "worst (win probability × leg multiplier) and each N-pick slip is "
-         "priced with the best N legs. Uncheck to price each slip with legs "
-         "1..N in the order entered."
-)
-if rank_mode:
-    _n_odds = int(_cv_number_input(
-        st, "Number of legs in pool", "leg_pool_size", float(DEFAULT_LEG_POOL_SIZE),
-        minimum=float(MIN_LEG_POOL_SIZE), max_value=float(MAX_LEG_POOL_SIZE),
-        step=1.0, format="%.0f",
-        help="How many candidate legs to enter. Slip sizes larger than the pool are skipped."
-    ))
-    if _n_odds != _n_leg_inputs:
-        # The sidebar was built for a different pool size; rebuild it.
-        st.rerun()
-else:
-    _n_odds = 8 if show_78 else 6
-_odds_per_row = 8 if show_78 or rank_mode else 6
-odds_cols = []
-for _row_start in range(0, _n_odds, _odds_per_row):
-    odds_cols.extend(st.columns(_odds_per_row)[:min(_odds_per_row, _n_odds - _row_start)])
+_n_odds = 8 if show_78 else 6
+odds_cols = st.columns(_n_odds)
 probs = []
-odds_text = []
 for i, col in enumerate(odds_cols):
-    val = _cv_text_input(col, f"Leg {i+1} Odds", f"l{i}", "-110")
+    val = col.text_input(f"Leg {i+1} Odds", value="-110", key=f"l{i}")
     prob = american_to_prob(val)
     probs.append(prob)
-    odds_text.append(val)
     if not use_std_leg_mults and _ud_format:
         col.caption(f"{prob*100:.1f}% | {leg_inputs[i]:.2f}x → x{leg_mults[i]:.3f}")
-    elif not use_std_leg_mults and _splash_format:
-        col.caption(f"{prob*100:.1f}% | {leg_inputs[i]:.1f}% → x{leg_mults[i]:.3f}")
     elif not use_std_leg_mults:
         col.caption(f"{prob*100:.1f}% | x{leg_mults[i]}")
     else:
         col.caption(f"{prob*100:.1f}%")
-
-leg_order = list(range(_n_odds))
-if rank_mode:
-    leg_order = rank_legs(probs, leg_mults[:_n_odds])
-    # Price every slip size off the ranked list: the best N legs are its first N.
-    leg_labels = [f"Leg {i+1}" for i in leg_order]
-    _odds_ranked = [odds_text[i] for i in leg_order]
-    probs = [probs[i] for i in leg_order]
-    leg_mults = [leg_mults[i] for i in leg_order]
-    leg_inputs = [leg_inputs[i] for i in leg_order]
-    with st.expander("Legs ranked best to worst", expanded=True):
-        _ranked_rows = []
-        for r, (lbl, odds, p, m) in enumerate(zip(leg_labels, _odds_ranked, probs, leg_mults)):
-            row = {"Rank": r + 1, "Leg": lbl, "Odds": odds, "Win %": f"{p*100:.1f}%"}
-            if not use_std_leg_mults:
-                row["Leg Mult"] = f"{m:.3f}x"
-                row["Win % × Mult"] = f"{p*m*100:.1f}%"
-            _ranked_rows.append(row)
-        st.table(_ranked_rows)
-else:
-    leg_labels = [f"Leg {i+1}" for i in range(_n_odds)]
 
 st.markdown("---")
 sc1, sc2, _ = st.columns([1, 1, 2])
@@ -1659,16 +1533,10 @@ if st.button("Calculate EV & Stakes", type="primary"):
         "max_stake_small": max_stake_small,
         "max_stake_large": max_stake_large,
         "max_stake_input": max_stake_input,
-        "payout_bet": payout_bet,
-        # Splash caps the slip's combined leg modifier.
-        "leg_mult_cap": (SPLASH_MAX_SLIP_MOD
-                         if (not use_std_leg_mults and _splash_format) else None),
+        "overage_hits": overage_hits,
     }
     _comparing = bool(_variants) and _ladder_choice == LADDER_AUTO
     _box_label = _ladder_choice if (_variants and not _comparing) else "Payout boxes"
-
-    _skipped_sizes = [n for n, _a, _f in slip_configs if n > len(probs)]
-    slip_configs = [c for c in slip_configs if c[0] <= len(probs)]
 
     for n, avg_structure, floor_structure in slip_configs:
         # The chalk adjustment depends on the legs, not the ladder, so every
@@ -1692,7 +1560,8 @@ if st.button("Calculate EV & Stakes", type="primary"):
         priced = []
         for _name, _avg, _floor in candidates:
             _comps = build_tier_components(
-                _avg, _floor, n, estimate_lower_tier_overage=est_lower_overage)
+                _avg, _floor, n, estimate_lower_tier_overage=est_lower_overage,
+                top_overage_scale=overage_scale_small if n <= 3 else overage_scale_large)
             priced.append(
                 (_name, evaluate_slip(n, _comps, probs, leg_mults, cfg, chalk_factor=chalk)))
 
@@ -1705,15 +1574,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
         result["Ladder"] = best_name
         result["Priced"] = priced
         result["Chalk"] = chalk
-        result["Legs"] = leg_labels[:n]
         results.append(result)
-
-    if _skipped_sizes:
-        st.warning("Not enough legs entered for: "
-                   + ", ".join(f"{n}-Pick" for n in _skipped_sizes)
-                   + ". Add legs to the pool to price them.")
-    if not results:
-        st.stop()
 
     # --- DISPLAY RESULTS ---
     _any_compared = any(len(res['Priced']) > 1 for res in results)
@@ -1728,7 +1589,10 @@ if st.button("Calculate EV & Stakes", type="primary"):
     if any_overage:
         _chalk_note = ", ".join(f"{r['Size']}: {r['Chalk']:.2f}x" for r in results if r['HasOverage'])
         st.info(f"Parimutuel overage active — payouts = guaranteed floor + overage. "
-                f"Boosts apply to the floor only. Chalk factor on all-correct overage — {_chalk_note}")
+                f"Boosts apply to the floor only. Overage scale — 2-3 picks: {overage_scale_small:.2f}x, "
+                f"4+ picks: {overage_scale_large:.2f}x. "
+                + ("Stakes treat overage as hit-or-miss. " if overage_hits else "")
+                + f"Chalk factor on all-correct overage — {_chalk_note}")
 
     if sweat_free_enabled:
         if stake_back_on_win:
@@ -1762,8 +1626,6 @@ if st.button("Calculate EV & Stakes", type="primary"):
         }
         if _any_compared:
             row["Ladder"] = res['Ladder']
-        if rank_mode:
-            row["Legs Used (best N)"] = ", ".join(l.replace("Leg ", "L") for l in res['Legs'])
         row.update({
             "EV %": f"{res['EV']*100:.2f}%",
             "Exp. Growth (bps)": f"{res['EG']:.2f}",
@@ -1775,12 +1637,6 @@ if st.button("Calculate EV & Stakes", type="primary"):
         if top_detail and res['Stake'] > 0:
             row["Top Prize"] = f"${top_detail['prize_dollars']:.2f}"
             row["Top Profit"] = f"${top_detail['profit_dollars']:.2f}"
-        if payout_bet > 0:
-            top_max = res['MaxBetDetails'][0] if res['MaxBetDetails'] else None
-            row[f"Top Prize @ ${payout_bet:,.2f}"] = (
-                f"${top_max['prize_dollars']:.2f}" if top_max else "—")
-            row[f"Top Profit @ ${payout_bet:,.2f}"] = (
-                f"${top_max['profit_dollars']:.2f}" if top_max else "—")
         table_data.append(row)
     st.table(table_data)
 
@@ -1818,9 +1674,7 @@ if st.button("Calculate EV & Stakes", type="primary"):
     if has_any_details:
         st.subheader("Payout Breakdown (Winning Tiers)")
         if not use_std_leg_mults:
-            _std_leg_label = (f"standard ({_ud_base:.2f}x) leg prices" if _ud_format
-                              else f"standard ({SPLASH_BASE_PCT:.0f}%) legs" if _splash_format
-                              else "standard (1.0x) leg multipliers")
+            _std_leg_label = f"standard ({_ud_base:.2f}x) leg prices" if _ud_format else "standard (1.0x) leg multipliers"
             st.caption(f"ℹ️ Payouts shown assume {_std_leg_label}. "
                        "Actual payouts vary based on which specific legs win.")
         if any_overage:
