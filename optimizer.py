@@ -492,7 +492,8 @@ def compute_payout_details(tier_components, n_legs, global_boost, boost_on_gross
         })
     return details
 
-def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
+def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0,
+                  void_rule=None, base_tiers=None):
     """Run the full pipeline for one slip size against one payout ladder.
 
     Outcomes -> Kelly -> stake cap -> expected growth, exactly as the results
@@ -501,6 +502,10 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     betting circumstances (boost, caps, bankroll, refunds) that all ladders
     are compared under, and chalk_factor the parimutuel adjustment, which
     depends on the legs rather than on the ladder.
+
+    void_rule (with base_tiers, the ladder's scaled tiers) re-grades the slip
+    over every pattern of voided legs at cfg["void_prob"] per leg; see
+    outcomes_with_voids. Omitted or a zero void rate grades as before.
     """
     current_probs = probs[:n]
     current_leg_mults = leg_mults[:n]
@@ -509,18 +514,26 @@ def evaluate_slip(n, tier_components, probs, leg_mults, cfg, chalk_factor=1.0):
     _hits = cfg.get("overage_hits")
     hit_prob = None if not _hits else (_hits[0] if n <= 3 else _hits[1], _hits[2])
 
+    void_prob = cfg.get("void_prob", 0.0)
+
     def outcomes_for(max_boost_amount, stake):
-        return calculate_complex_outcomes(
-            current_probs, current_leg_mults, tier_components, cfg["boost_mult"],
-            max_boost_amount=max_boost_amount, stake=stake,
-            boost_on_gross=cfg["boost_on_gross"],
-            sweat_free_fraction=cfg["sweat_free_fraction"],
-            stake_back_on_win=cfg["stake_back_on_win"],
-            refund_partial_wins=cfg["refund_partial_wins"],
-            chalk_factor=chalk_factor,
-            leg_mult_cap=cfg.get("leg_mult_cap"),
-            overage_hit_prob=hit_prob,
-        )
+        def grade(p, m, comps):
+            return calculate_complex_outcomes(
+                p, m, comps, cfg["boost_mult"],
+                max_boost_amount=max_boost_amount, stake=stake,
+                boost_on_gross=cfg["boost_on_gross"],
+                sweat_free_fraction=cfg["sweat_free_fraction"],
+                stake_back_on_win=cfg["stake_back_on_win"],
+                refund_partial_wins=cfg["refund_partial_wins"],
+                chalk_factor=chalk_factor,
+                leg_mult_cap=cfg.get("leg_mult_cap"),
+                overage_hit_prob=hit_prob,
+            )
+        if void_rule is not None and void_prob > 0 and base_tiers is not None:
+            return outcomes_with_voids(
+                current_probs, current_leg_mults, base_tiers, void_rule, void_prob,
+                cfg.get("payout_scale", 1.0), grade)
+        return grade(current_probs, current_leg_mults, tier_components)
 
     cap = ((cfg["max_stake_small"] if n <= 3 else cfg["max_stake_large"])
            if cfg["use_tiered_stakes"] else cfg["max_stake_input"])
@@ -924,6 +937,17 @@ PRESETS = {
         "p7": 0.0, "p7_i": 0.0, "p7_i2": 0.0,
         "p8": 0.0, "p8_i": 0.0, "p8_i2": 0.0,
     },
+    # Boxes hold the lowest-breakeven FlexBets ladder per size (Insured at 4,
+    # Standard elsewhere). Auto mode prices all three entry types instead.
+    "FlexBets": {
+        "p2": 3.0,
+        "p3": 6.0, "p3_i": 0.0,
+        "p4": 6.0, "p4_i": 1.5,
+        "p5": 20.0, "p5_i": 0.0, "p5_i2": 0.0,
+        "p6": 35.0, "p6_i": 0.0, "p6_i2": 0.0,
+        "p7": 65.0, "p7_i": 0.0, "p7_i2": 0.0,
+        "p8": 120.0, "p8_i": 0.0, "p8_i2": 0.0,
+    },
 }
 
 # --- VARIANT PAYOUT LADDERS ---
@@ -949,7 +973,121 @@ PRESET_VARIANTS = {
             6: {6: 25.0, 5: 2.6, 4: 0.25},
         },
     },
+    # FlexBets (Official Rules v1.2.261007, 10/7/26). Three entry types, chosen
+    # per entry. Slip size here = legs you actually pick.
+    #
+    # Bench k+1 pays the same multiplier for k/k starters or k-1/k starters +
+    # the bench hitting. Since it doesn't matter WHICH leg misses, that is
+    # exactly "at least k of k+1 legs", i.e. an (k+1)-leg ladder whose top two
+    # tiers pay the same. Bench 8+1 needs 9 legs and is beyond this app's 8.
+    #
+    # Breakeven per leg (equal legs): Std 2 57.7, Std 3 55.0, Ins 4 55.0
+    # (6p^4 + 6p^3q = 6p^3: same EV as Std 3 at every p), Std 5 54.9,
+    # Std 6 55.3, Std 7 55.1, Std 8 55.0, Bench 7+1 55.5, Bench 3+1 61.4.
+    #
+    # Not modelled: the "highest score" consolation multiplier, which depends
+    # on pool size (worth ~0 in a full 2,500 pool, more in thin pools).
+    "FlexBets": {
+        "Standard": {
+            2: {2: 3.0},
+            3: {3: 6.0},
+            4: {4: 10.0},
+            5: {5: 20.0},
+            6: {6: 35.0},
+            7: {7: 65.0},
+            8: {8: 120.0},
+        },
+        "Insured": {
+            3: {3: 3.0, 2: 1.0},
+            4: {4: 6.0, 3: 1.5},
+            5: {5: 10.0, 4: 2.25},
+            6: {6: 20.0, 5: 2.5, 4: 0.25},
+            7: {7: 40.0, 6: 2.75, 5: 0.5},
+            8: {8: 80.0, 7: 3.0, 6: 1.0},
+        },
+        "Bench": {
+            4: {4: 2.0, 3: 2.0},     # 3+1
+            5: {5: 3.0, 4: 3.0},     # 4+1
+            6: {6: 5.0, 5: 5.0},     # 5+1
+            7: {7: 9.0, 6: 9.0},     # 6+1
+            8: {8: 15.0, 7: 15.0},   # 7+1
+        },
+    },
 }
+
+
+# --- VOIDED LEGS (payout reversion) ---
+# Some sites re-grade an entry when legs void (DNP, tied line, injury) rather
+# than treating the void as a win or a loss. A void rule maps
+# (n_legs, n_voided) -> the ladder the REMAINING legs are graded on, or None
+# when the entry is voided and refunded. Only presets listed here get the
+# "void rate" input; everything else is graded with no voids, as before.
+
+def _flexbets_std_void(n, v):
+    # Sec 4.1.5: paid on the next-lower row per void; must keep >= 2 picks.
+    m = n - v
+    return PRESET_VARIANTS["FlexBets"]["Standard"].get(m) if m >= 2 else None
+
+
+def _flexbets_insured_void(n, v):
+    # Same reversion. Insured has no 2-pick row ("N/A"), so a 3-pick insured
+    # entry reverting to 2 is ASSUMED refunded -- the rules don't say.
+    return PRESET_VARIANTS["FlexBets"]["Insured"].get(n - v)
+
+
+def _flexbets_bench_void(n, v):
+    # Sec 4.1.5: a bench entry does not revert on its first void; the bench
+    # fills the hole, so the remaining legs must ALL hit. Each further void
+    # reverts one row ("5+1 with two primary voids -> 4-pick entry").
+    # ASSUMED: the reverted entry is paid on the Bench row with that many
+    # starters (5+1, 2 voids -> 4 legs left, all must hit, paid at 4+1 = 3x).
+    # A void on the bench leg itself is treated the same way.
+    m = n - v                     # legs left, all must hit
+    mult = PRESET_VARIANTS["FlexBets"]["Bench"].get(m + 1, {}).get(m + 1)
+    return {m: mult} if mult else None
+
+
+PRESET_VOID_RULES = {
+    "FlexBets": {
+        "Standard": _flexbets_std_void,
+        "Insured": _flexbets_insured_void,
+        "Bench": _flexbets_bench_void,
+    },
+}
+
+
+def outcomes_with_voids(probs, leg_mults, base_tiers, void_rule, void_prob, scale,
+                        outcomes_fn):
+    """Mix graded outcomes over every pattern of voided legs.
+
+    probs are each leg's chance of hitting GIVEN it settles; void_prob is the
+    chance any one leg voids. For each subset of voided legs the remaining
+    legs are graded on the ladder void_rule reverts to (scaled by `scale`),
+    or refunded (net 0) when it returns None. outcomes_fn(probs, mults,
+    tier_components) grades one entry with the caller's boost/refund settings.
+    3^N work in total: 6,561 scenarios at 8 legs.
+    """
+    n = len(probs)
+    out = []
+    for mask in itertools.product([0, 1], repeat=n):    # 1 = voided
+        v = sum(mask)
+        w = void_prob ** v * (1.0 - void_prob) ** (n - v)
+        if w <= 0.0:
+            continue
+        if v == 0:
+            tiers = base_tiers
+        else:
+            raw = void_rule(n, v)
+            if raw is None:
+                out.append((w, 0.0))                     # voided & refunded
+                continue
+            tiers = scaled_tiers(raw, scale)
+        live_p = [p for p, vd in zip(probs, mask) if not vd]
+        live_m = [m for m, vd in zip(leg_mults, mask) if not vd]
+        comps = build_tier_components(tiers, tiers, len(live_p),
+                                      estimate_lower_tier_overage=False)
+        out.extend((w * p, o) for p, o in outcomes_fn(live_p, live_m, comps))
+    return out
 
 # Selector value meaning "compare every ladder and keep the best".
 LADDER_AUTO = "Auto — highest EG"
@@ -995,6 +1133,8 @@ _PRESET_LEG_MULT_FORMATS = {
 # Other settings a preset forces on load (applied after the generic reset).
 _PRESET_SETTINGS = {
     "Splash": {"boost_on_gross": True},
+    # FlexBets' best ladders are 7 and 8 picks.
+    "FlexBets": {"show_78": True},
 }
 
 # Max stake defaults per preset (0 means no cap)
@@ -1260,6 +1400,23 @@ payout_bet = st.sidebar.number_input(
     help="Same bet for every slip size. The results table shows the top prize and "
          "profit at this bet, independent of the Kelly-recommended stake."
 )
+
+if selected_preset in PRESET_VOID_RULES:
+    void_rate_pct = st.sidebar.number_input(
+        "Void Rate per Leg (%)",
+        key="void_rate_pct",
+        value=0.0,
+        min_value=0.0,
+        max_value=50.0,
+        step=0.5,
+        help="Chance any one leg voids (DNP, line tie, injury). Voided legs re-grade "
+             "the entry on this site's reversion rules instead of counting as a win "
+             "or loss. Leg odds are then read as the chance of hitting given the leg "
+             "settles. 0 = ignore voids."
+    )
+    void_prob = void_rate_pct / 100.0
+else:
+    void_prob = 0.0
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Promo Settings")
@@ -1739,7 +1896,10 @@ if st.button("Calculate EV & Stakes", type="primary"):
         # Splash caps the slip's combined leg modifier.
         "leg_mult_cap": (SPLASH_MAX_SLIP_MOD
                          if (not use_std_leg_mults and _splash_format) else None),
+        "void_prob": void_prob,
+        "payout_scale": s,
     }
+    _void_rules = PRESET_VOID_RULES.get(selected_preset, {})
     _comparing = bool(_variants) and _ladder_choice == LADDER_AUTO
     _box_label = _ladder_choice if (_variants and not _comparing) else "Payout boxes"
 
@@ -1767,8 +1927,11 @@ if st.button("Calculate EV & Stakes", type="primary"):
             _comps = build_tier_components(
                 _avg, _floor, n, estimate_lower_tier_overage=est_lower_overage,
                 top_overage_scale=overage_scale_small if n <= 3 else overage_scale_large)
+            # A named ladder loaded into the boxes keeps its void rule.
+            _vrule = _void_rules.get(_name)
             priced.append(
-                (_name, evaluate_slip(n, _comps, probs, leg_mults, cfg, chalk_factor=chalk)))
+                (_name, evaluate_slip(n, _comps, probs, leg_mults, cfg, chalk_factor=chalk,
+                                      void_rule=_vrule, base_tiers=_avg)))
 
         # Expected growth decides. EV breaks ties, which matters when no stake
         # is warranted at all: growth is 0 for every ladder at a zero stake.
